@@ -1,0 +1,30 @@
+services:
+
+  db:
+    image: timescale/timescaledb:latest-pg17
+    restart: always
+    shm_size: 128mb
+    volumes:
+      - ./postgres_volume:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: [local password removed]
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_DB: market_data
+    ports:
+      - 5433:5432
+
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 8081:8080
+  dashboard:
+    image: grafana/grafana-oss
+    restart: always
+    ports:
+      - 3001:3000
+    volumes:
+      - grafana_storage:/var/lib/grafana
+volumes:
+  grafana_storage:

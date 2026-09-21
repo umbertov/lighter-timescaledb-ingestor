@@ -1,0 +1,83 @@
+use color_eyre::eyre::Result;
+use diesel::prelude::*;
+use diesel::r2d2::{ConnectionManager, Pool};
+use tracing::info;
+
+use models::NewSymbol;
+
+pub mod models;
+pub mod schema;
+
+/// Fetches `/api/v1/orderBooks` and upserts every market into the
+/// `symbols` table, keyed by Lighter's own `market_id` (not insertion
+/// order). Returns the DB-local `symbols.id` for each Lighter market.
+pub fn upsert_symbol(symbol_name: &str, market_id: i32, conn: &mut PgConnection) -> Result<i32> {
+    use crate::schema::symbols::dsl::{id, lighter_market_id, name, symbols};
+
+    let record = NewSymbol {
+        name: symbol_name,
+        lighter_market_id: market_id,
+    };
+    diesel::insert_into(symbols)
+        .values(&record)
+        .on_conflict(lighter_market_id)
+        .do_update()
+        .set(name.eq(symbol_name)) // no real update, just return the existing row's id
+        .returning(id)
+        .get_result(conn)
+        .map_err(|e| {
+            tracing::error!("upsert symbol {symbol_name} (market_id {market_id}) failed: {e}");
+            e.into()
+        })
+}
+
+pub fn get_or_upsert_symbol(
+    symbol_name: &str,
+    market_id: i32,
+    conn: &mut PgConnection,
+) -> Result<i32> {
+    use crate::schema::symbols::dsl::{id, lighter_market_id, symbols};
+
+    symbols
+        .filter(lighter_market_id.eq(market_id))
+        .select(id)
+        .first::<i32>(conn)
+        .or_else(|_e| upsert_symbol(symbol_name, market_id, conn))
+}
+
+pub fn insert_trades(rows: &[models::TradeRow], conn: &mut PgConnection) -> Result<usize> {
+    use crate::schema::trades;
+
+    Ok(diesel::insert_into(trades::table)
+        .values(rows)
+        .on_conflict_do_nothing()
+        .execute(conn)?)
+}
+
+pub fn insert_orderbook_messages(
+    rows: &[models::OrderbookMessageRow],
+    conn: &mut PgConnection,
+) -> Result<usize> {
+    use crate::schema::orderbook_messages;
+
+    Ok(diesel::insert_into(orderbook_messages::table)
+        .values(rows)
+        .execute(conn)?)
+}
+
+/// Creates an r2d2 connection pool to the given database.
+pub fn establish_postgres_connection_pool(
+    database_url: &str,
+) -> Result<Pool<ConnectionManager<PgConnection>>> {
+    info!("connecting to {database_url}");
+    let manager = ConnectionManager::<PgConnection>::new(database_url);
+    Ok(Pool::builder()
+        .test_on_check_out(true)
+        .max_size(2)
+        .build(manager)?)
+}
+
+pub fn establish_postgres_connection(database_url: &str) -> Result<PgConnection> {
+    info!("connecting to {database_url}");
+    Ok(PgConnection::establish(database_url)?)
+}

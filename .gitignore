@@ -1,0 +1,14 @@
+flake.lock
+.direnv/
+
+### Rust ###
+debug/
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+/postgres_volume
+.env
+
+/todos

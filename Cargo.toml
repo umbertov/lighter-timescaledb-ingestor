@@ -1,0 +1,29 @@
+[package]
+edition = "2021"
+name = "lighter-timescaledb-rs"
+version = "0.1.0"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+strip = true
+
+[dependencies]
+clap = { version = "4.4.*", features = ["derive", "env"] }
+color-eyre = "0.6.5"
+diesel = { version = "2.*.*", features = ["postgres", "numeric", "chrono", "r2d2", "serde_json"] }
+dotenv = "0.*"
+futures = "0.3.*"
+lighter-rs-types = { git = "ssh://git@github.com/umbertov/lighter-rs-types" }
+mimalloc = { version = "*", features = ["secure"] }
+openssl = { version = "*", features = ["vendored"] }
+pq-sys = { version = "*", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.*", features = ["derive"] }
+serde_json = "1.*"
+serde_with = { version = "3.*", features = ["chrono"] }
+tokio = { version = "1.*", features = ["full"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.*", features = ["serde"] }
