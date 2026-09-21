@@ -41,19 +41,19 @@ symbol name the way `mm-rs`'s `classify_universe.py` did for Bybit. See
 
 ## Setup
 
-Same shape as `bybit-timescaledb-ingestor`:
+The real TimescaleDB instance runs on the VM host (already tuned for
+its actual RAM, already running `bybit-timescaledb-ingestor`'s
+`[other database]` database), reachable from inside the VM at the
+QEMU/SLIRP gateway IP -- see `CLAUDE.md`, "Where the TimescaleDB
+instance actually lives", before reaching for `docker-compose.yml`'s
+`db` service, which is a superseded, unused local convenience:
 
 ```sh
 cp .env.example .env
-docker compose up -d db
 # apply migrations/*/up.sql in order against $DATABASE_URL, e.g. via psql
 # (a `diesel` CLI isn't in this repo's devShell yet -- see ./todos/)
 cargo run --bin lighter-timescaledb-rs
 ```
-
-`docker-compose.yml` uses non-default host ports (`5433`/`8081`/`3001`) so
-it can run alongside `bybit-timescaledb-ingestor`'s stack on the same
-machine without a port clash.
 
 ## What's shared with `mm-rs`
 

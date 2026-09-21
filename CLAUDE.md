@@ -55,6 +55,46 @@ critical of the code you read... flag rather than paper over").
   doesn't have one either, worth fixing in both if it becomes a recurring
   friction point rather than copying the gap forward silently.
 
+## Where the TimescaleDB instance actually lives
+
+There is no local docker-compose Postgres for real dev work on
+umbertov's machine -- `docker-compose.yml`'s `db` service (port 5433)
+was a session-1 convenience that got superseded once it became clear a
+real, already-correctly-tuned TimescaleDB instance exists one hop away.
+umbertov's dev machine is a VM; the real Postgres runs on the **host**,
+tuned for the host's actual [host memory removed] RAM (`shared_buffers = [memory setting removed]`,
+`effective_cache_size = [memory setting removed]` in its `postgresql.conf` -- do not
+"fix" these from inside the VM by comparing against `free -h` run
+*inside* the VM, which only sees the VM's own much smaller memory
+allocation; that comparison is meaningless and almost caused an
+unnecessary retune of a correctly-configured production-adjacent
+instance this session).
+
+- Reachable from inside the VM at the QEMU/SLIRP gateway IP, **not**
+  `localhost`: `[host address removed]`, port 5432 (find the gateway via `ip route
+  show default` if the IP ever changes). `localhost:5432` inside the VM
+  does not reach it.
+- Auth: `postgres` user, no password, e.g.
+  `DATABASE_URL=postgresql://postgres@[host address removed]/market_data`.
+- This host instance also serves `bybit-timescaledb-ingestor`'s
+  `[other database]` database. `market_data` is a **separate database
+  on the same instance** (created via `CREATE DATABASE market_data
+  TEMPLATE template0 LC_COLLATE 'C.UTF-8' LC_CTYPE 'C.UTF-8'` -- the
+  instance's default collation is `C.UTF-8`, not `C`, so a plain
+  `CREATE DATABASE market_data` fails on a collation mismatch) --
+  table names need no `lighter_`-prefix namespacing, since the
+  databases are already isolated from each other.
+- The host instance runs TimescaleDB 2.30.0, which is what the
+  `tsdb.hypertable` WITH-clause hypertable syntax in
+  `migrations/2026-09-21-000001_lighter_tables_v1/up.sql` needs (that
+  syntax was added in TimescaleDB 2.18; it does NOT work against the
+  2.17.2 bundled in the locally cached `timescale/timescaledb:latest-pg17`
+  docker image used by this repo's own now-superseded `docker-compose.yml`
+  `db` service).
+- Apply migrations the same way as before: raw `psql -f
+  migrations/*/up.sql` in order against that `DATABASE_URL` (no diesel
+  CLI in this devShell yet, see below).
+
 ## Testing without spending real API calls needlessly
 
 `sync_symbols` hits the live Lighter API on every run -- fine for
