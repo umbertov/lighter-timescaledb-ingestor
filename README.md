@@ -55,6 +55,22 @@ cp .env.example .env
 cargo run --bin lighter-timescaledb-rs
 ```
 
+### Running it persistently (inside the VM)
+
+`systemd/lighter-timescaledb-ingestor.service` runs the release binary
+as a `systemd --user` service, restarting on failure on top of the
+binary's own WS reconnect loop:
+
+```sh
+cargo build --release
+mkdir -p ~/.config/systemd/user
+ln -sf "$(pwd)/systemd/lighter-timescaledb-ingestor.service" ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now lighter-timescaledb-ingestor
+loginctl enable-linger "$USER"  # survive logout, not just this session
+journalctl --user -u lighter-timescaledb-ingestor -f  # tail logs
+```
+
 ## What's shared with `mm-rs`
 
 [`lighter-rs-types`](https://github.com/umbertov/lighter-rs-types) --
