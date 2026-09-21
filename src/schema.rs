@@ -1,5 +1,6 @@
-// Hand-written to match migrations/2026-09-21-000001_lighter_tables_v1, in
-// the shape `diesel print-schema` would generate. Regenerate for real
+// Hand-written to match migrations/2026-09-21-000001_lighter_tables_v1 and
+// migrations/2026-09-21-000002_trades_ws_and_dedup, in the shape
+// `diesel print-schema` would generate. Regenerate for real
 // (`diesel print-schema > src/schema.rs`, per diesel.toml) once a live
 // database is available to run migrations against -- this file has NOT
 // been verified against an actual migrated database.
@@ -22,6 +23,7 @@ diesel::table! {
         price -> Float8,
         size -> Float8,
         is_maker_ask -> Bool,
+        trade_type -> Text,
     }
 }
 

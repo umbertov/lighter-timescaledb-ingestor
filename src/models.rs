@@ -28,6 +28,7 @@ pub struct TradeRow {
     pub price: f64,
     pub size: f64,
     pub is_maker_ask: bool,
+    pub trade_type: String,
 }
 
 #[derive(Insertable, Debug)]

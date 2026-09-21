@@ -1,12 +1,14 @@
 use color_eyre::eyre::Result;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
+use std::collections::HashMap;
 use tracing::info;
 
 use models::NewSymbol;
 
 pub mod models;
 pub mod schema;
+pub mod ws;
 
 /// Fetches `/api/v1/orderBooks` and upserts every market into the
 /// `symbols` table, keyed by Lighter's own `market_id` (not insertion
@@ -80,4 +82,17 @@ pub fn establish_postgres_connection_pool(
 pub fn establish_postgres_connection(database_url: &str) -> Result<PgConnection> {
     info!("connecting to {database_url}");
     Ok(PgConnection::establish(database_url)?)
+}
+
+/// Maps Lighter's own `market_id` to this database's local `symbols.id`.
+/// Loaded once at startup: the full symbol set is already known after
+/// `sync_symbols` runs, so there is no lazy DB fallback on a cache miss.
+pub fn load_symbol_cache(conn: &mut PgConnection) -> Result<HashMap<i32, i32>> {
+    use crate::schema::symbols::dsl::{id, lighter_market_id, symbols};
+
+    Ok(symbols
+        .select((lighter_market_id, id))
+        .load::<(i32, i32)>(conn)?
+        .into_iter()
+        .collect())
 }

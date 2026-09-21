@@ -12,9 +12,17 @@ historical L2 order-book data available for Lighter anywhere, paid or free
 - **Symbol sync** (`/api/v1/orderBooks` -> `symbols` table): real, working,
   idempotent. Verified end to end against a live TimescaleDB instance and
   the real Robinhood Chain API on 2026-09-21: 84 markets synced.
-- **Trades / order-book ingestion**: **not implemented**. See `./todos/`
-  (gitignored, local backlog) for exactly what's blocking each one and what
-  to do about it. Running the binary today only populates `symbols`.
+- **Trades / order-book ingestion**: real, working. A single WS connection
+  subscribes to every synced market's `order_book/{id}` and `trade/{id}`
+  channels. Order-book gap detection uses the `nonce`/`begin_nonce` chain;
+  on a gap, the whole connection is dropped and resubscribed from scratch.
+  Trades and liquidations both land in `trades`, distinguished by
+  `trade_type`. Verified end to end against the real Robinhood Chain API
+  and WS stream on 2026-09-21: thousands of order-book deltas, snapshots
+  for all 84 markets, and trade/liquidation rows written with zero
+  duplicates under the `(time, symbol, lighter_trade_id)` unique index.
+  Market curation (crypto vs. tokenized asset, see below) is deferred:
+  every synced market is ingested today.
 - **Private fills** (a `bin/private_ws`-equivalent to `bybit-timescaledb-ingestor`'s,
   for the bot's own fills): out of scope until `mm-rs`'s Lighter connector
   is actually trading -- there's nothing to record yet.
