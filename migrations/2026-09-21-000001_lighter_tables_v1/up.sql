@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS trades (
    tsdb.chunk_interval='1 day'
 );
 
-CREATE INDEX trades_symbol_lighter_trade_id_idx
+CREATE INDEX IF NOT EXISTS trades_symbol_lighter_trade_id_idx
   ON trades (symbol, lighter_trade_id DESC);
 
 --------------------------------------------------
@@ -74,9 +74,9 @@ CREATE TABLE IF NOT EXISTS orderbook_messages (
   tsdb.chunk_interval='1 day'
 );
 
-CREATE INDEX orderbook_messages_symbol_time_idx
+CREATE INDEX IF NOT EXISTS orderbook_messages_symbol_time_idx
   ON orderbook_messages (symbol, time DESC);
-CREATE INDEX orderbook_messages_time_brin
+CREATE INDEX IF NOT EXISTS orderbook_messages_time_brin
   ON orderbook_messages USING BRIN(time);
 
 SELECT add_retention_policy(

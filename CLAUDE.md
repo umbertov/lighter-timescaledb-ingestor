@@ -95,6 +95,40 @@ instance this session).
   migrations/*/up.sql` in order against that `DATABASE_URL` (no diesel
   CLI in this devShell yet, see below).
 
+## Migration idempotency, and backfilling diesel's bookkeeping
+
+Every `up.sql` must be safe to run twice in a row against the same
+database (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`,
+`ADD COLUMN IF NOT EXISTS`, etc.) -- test this explicitly (`psql -f
+up.sql` twice against a scratch database, or `diesel migration run`
+twice) before considering a new migration done, not just a single clean
+apply. This is not a hypothetical: `2026-09-21-000001_lighter_tables_v1`
+originally shipped with un-guarded `CREATE INDEX` statements, which was
+fine as long as everything ran through raw `psql` by hand, but broke the
+moment `diesel migration run` was used for real against a database
+whose tables/indexes already existed -- it errored out mid-migration on
+`relation "trades_symbol_lighter_trade_id_idx" already exists`.
+
+Since this repo's migrations were originally applied by hand via `psql`
+(no diesel CLI in the devShell, see above) rather than through diesel
+itself, `__diesel_schema_migrations` did not reflect that
+`lighter_tables_v1`/`trades_ws_and_dedup` were already applied. Running
+`diesel migration revert -a && diesel migration run` against that state
+replayed migrations diesel thought were pending, exposed the
+non-idempotency above, and then a follow-up `migration revert` against
+the still-live hypertables failed on `DROP EXTENSION ... other objects
+depend on it` (TimescaleDB's own columnstore/retention background jobs
+still referenced it). No data was lost either time -- both failures were
+non-destructive statements erroring out, not destructive ones
+succeeding -- but the fix was to backfill the missing bookkeeping rows
+by hand once satisfied the schema already matched:
+`INSERT INTO __diesel_schema_migrations (version) VALUES
+('20260921000001'), ('20260921000002') ON CONFLICT (version) DO
+NOTHING;` (version = the migration folder's timestamp with the dashes
+removed). Do this instead of a destructive revert/recreate cycle
+whenever diesel's bookkeeping falls behind schema state that was
+actually applied out-of-band.
+
 ## Testing without spending real API calls needlessly
 
 `sync_symbols` hits the live Lighter API on every run -- fine for
