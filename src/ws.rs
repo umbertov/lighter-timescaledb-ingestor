@@ -28,6 +28,17 @@ use tracing::{debug, error, info, warn};
 const BATCH_CAPACITY: usize = 128;
 const SUBSCRIBE_PACING: Duration = Duration::from_millis(100);
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+/// The server's reverse proxy enforces a read deadline on the
+/// client->server direction: confirmed by capturing repeated
+/// disconnects at almost exactly 120s after subscribing, each closed
+/// normally with a `read tcp ...: i/o timeout` reason naming the
+/// proxy's own read of our connection, with zero server-sent `ping`
+/// messages observed in between (ruling out the reference Python SDK's
+/// `ping`/`pong` JSON exchange as the actual mechanism here -- that
+/// code path is defensive, not what this deployment relies on). A
+/// client-initiated WS ping frame well under that window keeps the
+/// proxy's read timer from firing.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 
 pub enum WriteMsg {
     Trade(TradeRow),
@@ -149,28 +160,49 @@ pub async fn run_ws_ingestion(
     // sent a brand-new snapshot for every market.
     let mut last_nonce: HashMap<i32, i64> = HashMap::new();
 
-    while let Some(frame) = read.next().await {
-        let frame = frame.wrap_err("ws read error")?;
-        let text = match frame {
-            Message::Text(t) => t,
-            Message::Close(reason) => return Err(eyre!("ws closed by server: {reason:?}")),
-            _ => continue,
-        };
+    let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
+    keepalive.tick().await; // first tick fires immediately; discard it
 
-        let value: serde_json::Value =
-            serde_json::from_str(&text).wrap_err_with(|| format!("parsing ws frame: {text}"))?;
-        let ty = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    loop {
+        tokio::select! {
+            frame = read.next() => {
+                let Some(frame) = frame else {
+                    return Err(eyre!("ws stream ended"));
+                };
+                let frame = frame.wrap_err("ws read error")?;
+                let text = match frame {
+                    Message::Text(t) => t,
+                    Message::Close(reason) => return Err(eyre!("ws closed by server: {reason:?}")),
+                    _ => continue,
+                };
 
-        if ty.ends_with("order_book") {
-            handle_orderbook_frame(value, symbol_cache, &mut last_nonce, tx).await?;
-        } else if ty.ends_with("trade") {
-            handle_trade_frame(value, symbol_cache, tx).await?;
-        } else {
-            debug!("unhandled ws frame type {ty:?}: {text}");
+                let value: serde_json::Value = serde_json::from_str(&text)
+                    .wrap_err_with(|| format!("parsing ws frame: {text}"))?;
+                let ty = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                if ty.ends_with("order_book") {
+                    handle_orderbook_frame(value, symbol_cache, &mut last_nonce, tx).await?;
+                } else if ty.ends_with("trade") {
+                    handle_trade_frame(value, symbol_cache, tx).await?;
+                } else if ty == "ping" {
+                    // Defensive: matches the reference Python SDK's
+                    // `WsClient.on_message` ping/pong handling, though
+                    // this deployment was never observed to send one --
+                    // see KEEPALIVE_INTERVAL for the mechanism that
+                    // actually keeps the connection alive.
+                    write
+                        .send(Message::Text(serde_json::json!({"type": "pong"}).to_string()))
+                        .await
+                        .wrap_err("sending pong")?;
+                } else {
+                    debug!("unhandled ws frame type {ty:?}: {text}");
+                }
+            }
+            _ = keepalive.tick() => {
+                write.send(Message::Ping(Vec::new())).await.wrap_err("sending keepalive ping")?;
+            }
         }
     }
-
-    Err(eyre!("ws stream ended"))
 }
 
 async fn handle_orderbook_frame(
