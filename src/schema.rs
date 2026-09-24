@@ -17,6 +17,7 @@ diesel::table! {
         id -> Int4,
         #[max_length = 255]
         name -> Varchar,
+        market_type -> Text,
         lighter_market_id -> Int4,
     }
 }

@@ -9,12 +9,14 @@ pub struct Symbol {
     pub id: i32,
     pub name: String,
     pub lighter_market_id: i32,
+    pub market_type: String,
 }
 
 #[derive(Insertable)]
 #[diesel(table_name = symbols)]
 pub struct NewSymbol<'a> {
     pub name: &'a str,
+    pub market_type: &'a str,
     pub lighter_market_id: i32,
 }
 

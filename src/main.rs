@@ -1,11 +1,10 @@
 //! Lighter (Robinhood Chain) market-data ingestor.
 //!
 //! Symbol sync (`/api/v1/orderBooks` -> `symbols` table) runs once at
-//! startup, then order-book and trade WS ingestion (`src/ws.rs`) runs
-//! for every synced market until the process is stopped.
+//! startup, then WebSocket ingestion runs for every perp and spot market.
 use clap::Parser;
-use color_eyre::eyre::{Result, WrapErr};
-use diesel::PgConnection;
+use color_eyre::eyre::{eyre, Result, WrapErr};
+use diesel::{Connection, PgConnection};
 use lighter_rs_types::OrderBooksResponse;
 use lighter_timescaledb_rs::ws::{self, WriteMsg};
 use mimalloc::MiMalloc;
@@ -79,17 +78,44 @@ async fn sync_symbols(api_url: &str, conn: &mut PgConnection) -> Result<()> {
         .get(format!("{api_url}/api/v1/orderBooks"))
         .send()
         .await?
+        .error_for_status()?
         .json()
         .await?;
 
-    for market in &resp.order_books {
-        let id =
-            lighter_timescaledb_rs::get_or_upsert_symbol(&market.symbol, market.market_id, conn)?;
-        info!(
-            "synced symbol {} (lighter market_id={}, db id={id})",
-            market.symbol, market.market_id
-        );
+    if resp.code != 200 {
+        return Err(eyre!("orderBooks returned code {}", resp.code));
     }
+    if resp.order_books.is_empty() {
+        return Err(eyre!("orderBooks returned no markets"));
+    }
+
+    if let Some(market) = resp
+        .order_books
+        .iter()
+        .find(|market| !matches!(market.market_type.as_str(), "perp" | "spot"))
+    {
+        return Err(eyre!(
+            "unsupported market type {:?} for market_id {}",
+            market.market_type,
+            market.market_id
+        ));
+    }
+
+    conn.transaction::<_, color_eyre::eyre::Report, _>(|conn| {
+        for market in &resp.order_books {
+            let id = lighter_timescaledb_rs::upsert_symbol(
+                &market.symbol,
+                &market.market_type,
+                market.market_id,
+                conn,
+            )?;
+            info!(
+                "synced {} market {} (lighter market_id={}, db id={id})",
+                market.market_type, market.symbol, market.market_id
+            );
+        }
+        Ok(())
+    })?;
 
     info!("synced {} markets from {api_url}", resp.order_books.len());
     Ok(())
