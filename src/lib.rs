@@ -61,7 +61,7 @@ pub fn insert_orderbook_messages(
 pub fn establish_postgres_connection_pool(
     database_url: &str,
 ) -> Result<Pool<ConnectionManager<PgConnection>>> {
-    info!("connecting to {database_url}");
+    info!("connecting to PostgreSQL");
     let manager = ConnectionManager::<PgConnection>::new(database_url);
     Ok(Pool::builder()
         .test_on_check_out(true)
@@ -70,7 +70,7 @@ pub fn establish_postgres_connection_pool(
 }
 
 pub fn establish_postgres_connection(database_url: &str) -> Result<PgConnection> {
-    info!("connecting to {database_url}");
+    info!("connecting to PostgreSQL");
     Ok(PgConnection::establish(database_url)?)
 }
 

@@ -12,3 +12,4 @@ Cargo.lock
 .env
 
 /todos
+/operational-notes/
