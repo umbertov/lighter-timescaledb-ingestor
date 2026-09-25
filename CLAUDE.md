@@ -19,6 +19,9 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 
 ## Development
 
+- Start the database with `nix run .#compose -- up -d db`.
+- Apply migrations before you start the ingestor with `nix run .#up`.
+- Use `nix run .#compose -- down` to stop the Compose services.
 - Use `.env` for local settings. Do not commit that file.
 - Use `.env.example` as the portable settings template.
 - Do not log database connection strings.

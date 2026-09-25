@@ -10,10 +10,10 @@ Private account fills are out of scope until the trading client uses Lighter.
 
 ## Setup
 
-Start the local database with Docker Compose:
+Start the database with Nix and Docker Compose:
 
 ```sh
-docker compose up -d db
+nix run .#compose -- up -d db
 ```
 
 Copy the sample settings file and edit it for your database:
@@ -22,11 +22,15 @@ Copy the sample settings file and edit it for your database:
 cp .env.example .env
 ```
 
-Apply each `migrations/*/up.sql` file in timestamp order or using Diesel CLI. Then start the service:
+Apply each `migrations/*/up.sql` file in timestamp order or use Diesel CLI. Start the full stack after the migrations:
 
 ```sh
-cargo run --bin lighter-timescaledb-rs
+nix run .#up
 ```
+
+The `up` command builds and loads the flake Docker image, then starts the ingestor, TimescaleDB, Adminer, and Grafana.
+Run `nix run .#compose -- down` to stop the services.
+Run Nix commands from the project root. Docker must be installed and its daemon must run.
 
 The sample database password is for local development only. Change it before you expose the database outside your machine.
 

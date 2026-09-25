@@ -80,6 +80,49 @@
         };
       };
 
+      apps.${system} = {
+        up = {
+          type = "app";
+          program = "${
+            pkgs.writeShellApplication {
+              name = "lighter-up";
+              runtimeInputs = [
+                pkgs.docker
+                pkgs.docker-compose
+                pkgs.nix
+              ];
+              text = ''
+                if [ ! -f "$PWD/flake.nix" ] || [ ! -f "$PWD/docker-compose.yml" ]; then
+                  echo "Run this command from the project root." >&2
+                  exit 1
+                fi
+
+                image="$(nix build .#docker --no-link --print-out-paths)"
+                docker load --input "$image"
+                exec docker-compose --project-directory "$PWD" -f "$PWD/docker-compose.yml" up -d "$@"
+              '';
+            }
+          }/bin/lighter-up";
+        };
+        compose = {
+          type = "app";
+          program = "${
+            pkgs.writeShellApplication {
+              name = "lighter-compose";
+              runtimeInputs = [ pkgs.docker-compose ];
+              text = ''
+                if [ ! -f "$PWD/docker-compose.yml" ]; then
+                  echo "Run this command from the project root." >&2
+                  exit 1
+                fi
+
+                exec docker-compose --project-directory "$PWD" -f "$PWD/docker-compose.yml" "$@"
+              '';
+            }
+          }/bin/lighter-compose";
+        };
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         packages = [
           pkgs.diesel-cli

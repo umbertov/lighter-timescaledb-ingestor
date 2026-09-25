@@ -13,6 +13,20 @@ services:
       POSTGRES_DB: lighter_data
     ports:
       - 5433:5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d lighter_data"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ingestor:
+    image: lighter-timescaledb-ingestor:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://admin:local-development-only@db:5432/lighter_data
+    depends_on:
+      db:
+        condition: service_healthy
 
   adminer:
     image: adminer
