@@ -14,9 +14,8 @@ color-eyre = "0.6.5"
 diesel = { version = "2.*.*", features = ["postgres", "numeric", "chrono", "r2d2", "serde_json"] }
 dotenv = "0.*"
 futures = "0.3.*"
-lighter-rs-types = { git = "ssh://git@github.com/umbertov/lighter-rs-types" }
+lighter-rs-types = { path = "vendor/lighter-rs-types" }
 mimalloc = { version = "*", features = ["secure"] }
-openssl = { version = "*", features = ["vendored"] }
 pq-sys = { version = "*", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.*", features = ["derive"] }
