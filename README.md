@@ -32,4 +32,10 @@ The sample database password is for local development only. Change it before you
 
 ## Lighter message types
 
-The `lighter-rs-types` crate provides message types for the Lighter REST and WebSocket APIs. Check that crate before you add a message shape.
+The `lighter-rs-types` crate in `crates/` provides message types for the Lighter REST and WebSocket APIs. Check that crate before you add a message shape.
+
+Build all workspace crates from the repository root:
+
+```sh
+cargo build --workspace
+```

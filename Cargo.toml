@@ -3,6 +3,10 @@ edition = "2021"
 name = "lighter-timescaledb-rs"
 version = "0.1.0"
 
+[workspace]
+members = ["crates/lighter-rs-types"]
+resolver = "2"
+
 [profile.release]
 codegen-units = 1
 lto = "fat"
@@ -14,7 +18,7 @@ color-eyre = "0.6.5"
 diesel = { version = "2.*.*", features = ["postgres", "numeric", "chrono", "r2d2", "serde_json"] }
 dotenv = "0.*"
 futures = "0.3.*"
-lighter-rs-types = { path = "vendor/lighter-rs-types" }
+lighter-rs-types = { path = "crates/lighter-rs-types" }
 mimalloc = { version = "*", features = ["secure"] }
 pq-sys = { version = "*", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
