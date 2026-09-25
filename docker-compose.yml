@@ -1,44 +1,41 @@
 services:
-
   db:
-    image: timescale/timescaledb:latest-pg17
-    restart: always
-    shm_size: 128mb
+    image: timescale/timescaledb:latest-pg18
+    restart: unless-stopped
+    mem_limit: 24g
+    shm_size: 1gb
+    command:
+      - postgres
+      - -c
+      - timezone=UTC
     volumes:
-      - ./postgres_volume:/var/lib/postgresql/data
+      - timescaledb_data:/var/lib/postgresql
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: local-development-only
-      PGDATA: /var/lib/postgresql/data/pgdata
-      POSTGRES_DB: lighter_data
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
+      TS_TUNE_MEMORY: 24GB
+      TS_TUNE_MAX_CONNS: 50
     ports:
-      - 5433:5432
+      - "127.0.0.1:5433:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d lighter_data"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 30s
 
   ingestor:
-    image: lighter-timescaledb-ingestor:latest
+    image: ${INGESTOR_IMAGE:?Set INGESTOR_IMAGE}
     restart: unless-stopped
+    profiles: ["ingestor"]
     environment:
-      DATABASE_URL: postgresql://admin:local-development-only@db:5432/lighter_data
+      DATABASE_URL: ${INGESTOR_DATABASE_URL:?Set INGESTOR_DATABASE_URL}
+      LIGHTER_API_URL: ${LIGHTER_API_URL:?Set LIGHTER_API_URL}
+      LIGHTER_WS_URL: ${LIGHTER_WS_URL:?Set LIGHTER_WS_URL}
     depends_on:
       db:
         condition: service_healthy
 
-  adminer:
-    image: adminer
-    restart: always
-    ports:
-      - 8081:8080
-  dashboard:
-    image: grafana/grafana-oss
-    restart: always
-    ports:
-      - 3001:3000
-    volumes:
-      - grafana_storage:/var/lib/grafana
 volumes:
-  grafana_storage:
+  timescaledb_data:
