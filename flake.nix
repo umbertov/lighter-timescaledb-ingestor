@@ -82,6 +82,7 @@
 
       devShells.${system}.default = pkgs.mkShell {
         packages = [
+          pkgs.diesel-cli
           pkgs.cmake
           pkgs.git
           pkgs.openssh
