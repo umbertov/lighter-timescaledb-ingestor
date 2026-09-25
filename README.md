@@ -22,7 +22,7 @@ Copy the sample settings file and edit it for your database:
 cp .env.example .env
 ```
 
-Apply each `migrations/*/up.sql` file in timestamp order. Then start the service:
+Apply each `migrations/*/up.sql` file in timestamp order or using Diesel CLI. Then start the service:
 
 ```sh
 cargo run --bin lighter-timescaledb-rs
