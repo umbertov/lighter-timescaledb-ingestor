@@ -34,11 +34,44 @@
         rustc = rustToolchain;
       };
 
+      rustSource = pkgs.lib.cleanSourceWith {
+        src = ./.;
+        filter =
+          path: type:
+          let
+            root = toString ./.;
+            pathString = toString path;
+            relativePath = if pathString == root then "" else pkgs.lib.removePrefix "${root}/" pathString;
+            topLevelCodeDirs = [
+              "src"
+              "tests"
+              "benches"
+              "examples"
+              ".cargo"
+            ];
+            isTopLevelCode = builtins.any (
+              directory: relativePath == directory || pkgs.lib.hasPrefix "${directory}/" relativePath
+            ) topLevelCodeDirs;
+            isWorkspaceDir = relativePath == "crates" || builtins.match "crates/[^/]+" relativePath != null;
+            isWorkspaceCode =
+              builtins.match "crates/[^/]+/(Cargo\\.toml|build\\.rs|src(/.*)?|tests(/.*)?|benches(/.*)?|examples(/.*)?)" relativePath
+              != null;
+            isBuildFile = builtins.elem relativePath [
+              "Cargo.toml"
+              "Cargo.lock"
+              "build.rs"
+              "rust-toolchain"
+              "rust-toolchain.toml"
+            ];
+          in
+          pathString == root || isTopLevelCode || isWorkspaceDir || isWorkspaceCode || isBuildFile;
+      };
+
       # Statically linked Rust binary derivation
       app = pkgs.pkgsStatic.rustPlatform.buildRustPackage {
         pname = "lighter-timescaledb-ingestor";
         version = "0.1.0";
-        src = ./.;
+        src = rustSource;
 
         cargoLock = {
           lockFile = ./Cargo.lock;

@@ -5,14 +5,77 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths:
+      - ".cargo/**"
+      - ".github/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - "crates/**/Cargo.toml"
+      - "crates/**/build.rs"
+      - "crates/**/src/**"
+      - "crates/**/tests/**"
+      - "crates/**/benches/**"
+      - "crates/**/examples/**"
+      - "src/**"
+      - "tests/**"
+      - "benches/**"
+      - "examples/**"
+      - "flake.nix"
+      - "flake.lock"
+      - "rust-toolchain"
+      - "rust-toolchain.toml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect Rust changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust == 'true' || steps.all.outputs.rust == 'true' }}
+    steps:
+      - name: Check pull request paths
+        if: github.event_name == 'pull_request'
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            rust:
+              - '.cargo/**'
+              - '.github/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'build.rs'
+              - 'crates/**/Cargo.toml'
+              - 'crates/**/build.rs'
+              - 'crates/**/src/**'
+              - 'crates/**/tests/**'
+              - 'crates/**/benches/**'
+              - 'crates/**/examples/**'
+              - 'src/**'
+              - 'tests/**'
+              - 'benches/**'
+              - 'examples/**'
+              - 'flake.nix'
+              - 'flake.lock'
+              - 'rust-toolchain'
+              - 'rust-toolchain.toml'
+
+      - name: Run checks for non pull request events
+        if: github.event_name != 'pull_request'
+        id: all
+        run: echo "rust=true" >> "$GITHUB_OUTPUT"
+
   checks:
     name: Check and build image
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -48,7 +48,9 @@ cargo build --workspace
 
 ## Continuous integration
 
-GitHub Actions checks Rust formatting, runs Clippy, runs workspace tests, and builds the Docker image for pull requests.
+The Nix package source contains Rust code and Cargo files. Changes to documentation and Compose files do not rebuild the Rust package.
+Pushes to `main` start CI only when Rust, Cargo, Nix, or workflow files change. Pull requests skip the full checks job when these files do not change.
+Version tags and manual runs execute the full checks job. GitHub Actions checks Rust formatting, runs Clippy, runs workspace tests, and builds the Docker image.
 Pushes to `main` and tags that start with `v` publish the image to GitHub Container Registry.
 The workflow caches Nix store paths between runs and passes the checked image to the publish job as an artifact.
 Main branch pushes publish `latest` and a commit tag. Version tags publish the matching version tag.

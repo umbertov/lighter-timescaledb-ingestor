@@ -32,4 +32,7 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 ## CI
 
 - Keep formatting, Clippy, workspace tests, and the Docker image build in `.github/workflows/ci.yml`.
+- Run full CI only when Rust, Cargo, Nix, or workflow paths change.
+- Use the same path list for push filters and pull request checks.
+- Limit the Nix package source to Rust build inputs.
 - Publish images to GitHub Container Registry only after all checks pass.
