@@ -1,6 +1,6 @@
 # Project guidance
 
-Read `README.md` before you change the project.
+Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE.md` after you change the project.
 
 ## Data model
 
