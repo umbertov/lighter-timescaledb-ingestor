@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Check and build image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3
+
+      - name: Cache Nix store paths
+        uses: DeterminateSystems/magic-nix-cache-action@v15
+
+      - name: Check Rust formatting
+        run: nix develop --command cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: nix develop --command cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Run workspace tests
+        run: nix develop --command cargo test --workspace --locked
+
+      - name: Build the Docker image
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          image_path="$(nix build .#docker --no-link --print-out-paths)"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            cp "$image_path" "$RUNNER_TEMP/lighter-timescaledb-ingestor.tar.gz"
+          fi
+
+      - name: Upload the Docker image
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-image
+          path: ${{ runner.temp }}/lighter-timescaledb-ingestor.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Push image to GitHub Container Registry
+    if: github.event_name == 'push'
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download the Docker image
+        uses: actions/download-artifact@v8
+        with:
+          name: docker-image
+          path: ${{ runner.temp }}/docker-image
+
+      - name: Load the Docker image
+        run: docker load --input "$RUNNER_TEMP/docker-image/lighter-timescaledb-ingestor.tar.gz"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push the image
+        env:
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          local_image="lighter-timescaledb-ingestor:latest"
+          sha_tag="sha-${GITHUB_SHA::12}"
+
+          docker tag "$local_image" "$image:$sha_tag"
+          docker push "$image:$sha_tag"
+
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            docker tag "$local_image" "$image:latest"
+            docker push "$image:latest"
+          fi
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            docker tag "$local_image" "$image:$GITHUB_REF_NAME"
+            docker push "$image:$GITHUB_REF_NAME"
+          fi

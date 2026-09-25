@@ -129,6 +129,7 @@
           pkgs.cmake
           pkgs.git
           pkgs.openssh
+          pkgs.openssl
           pkgs.perl
           pkgs.pkg-config
           pkgs.postgresql_18

@@ -27,3 +27,8 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 - Do not log database connection strings.
 - Use fixtures for automated tests that need market data.
 - Do not call the live API repeatedly from a test suite.
+
+## CI
+
+- Keep formatting, Clippy, workspace tests, and the Docker image build in `.github/workflows/ci.yml`.
+- Publish images to GitHub Container Registry only after all checks pass.

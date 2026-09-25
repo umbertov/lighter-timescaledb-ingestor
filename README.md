@@ -43,3 +43,10 @@ Build all workspace crates from the repository root:
 ```sh
 cargo build --workspace
 ```
+
+## Continuous integration
+
+GitHub Actions checks Rust formatting, runs Clippy, runs workspace tests, and builds the Docker image for pull requests.
+Pushes to `main` and tags that start with `v` publish the image to GitHub Container Registry.
+The workflow caches Nix store paths between runs and passes the checked image to the publish job as an artifact.
+Main branch pushes publish `latest` and a commit tag. Version tags publish the matching version tag.
