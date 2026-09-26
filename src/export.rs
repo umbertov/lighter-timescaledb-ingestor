@@ -73,6 +73,7 @@ fn parquet_writer(path: &Path, schema: Arc<Schema>) -> Result<ArrowWriter<std::f
         .wrap_err_with(|| format!("creating {}", path.display()))?;
     let properties = WriterProperties::builder()
         .set_compression(Compression::ZSTD(Default::default()))
+        .set_max_row_group_size(BATCH_SIZE)
         .build();
     ArrowWriter::try_new(file, schema, Some(properties)).wrap_err("creating Parquet writer")
 }
