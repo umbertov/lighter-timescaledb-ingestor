@@ -8,6 +8,8 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 - Trades and order-book messages use TimescaleDB hypertables.
 - Store order-book bids and asks as JSONB price-level arrays.
 - Use `lighter_market_id` as the symbol upsert conflict key.
+- Export Parquet data through the `export` command. Use the ticker name in the exported `symbol` column.
+- Stream query results into bounded Arrow batches. Do not load full hypertables into memory.
 - Check `lighter-rs-types` before you add Lighter message shapes.
 
 ## Migrations

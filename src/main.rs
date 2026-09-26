@@ -2,12 +2,13 @@
 //!
 //! Symbol sync (`/api/v1/orderBooks` -> `symbols` table) runs once at
 //! startup, then WebSocket ingestion runs for every perp and spot market.
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use color_eyre::eyre::{eyre, Result, WrapErr};
 use diesel::{Connection, PgConnection};
 use lighter_rs_types::OrderBooksResponse;
 use lighter_timescaledb_rs::ws::{self, WriteMsg};
 use mimalloc::MiMalloc;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -20,6 +21,8 @@ const WRITE_CHANNEL_CAPACITY: usize = 1024;
 
 #[derive(Parser, Debug)]
 struct IngestorConfig {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// Lighter REST API base URL. Defaults to Robinhood Chain; pass
     /// https://testnet.zklighter.elliot.ai for the zkLighter testnet.
     #[arg(
@@ -38,6 +41,29 @@ struct IngestorConfig {
     ws_url: String,
 }
 
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Export stored market data as Parquet files.
+    Export {
+        /// Output directory for the Parquet files.
+        #[arg(long)]
+        output_dir: PathBuf,
+        /// Export only these ticker names. Repeat this option for each ticker.
+        #[arg(long = "symbol")]
+        symbols: Vec<String>,
+        /// Export trades, order books, or both.
+        #[arg(long, value_enum, default_value = "both")]
+        dataset: ExportDataset,
+    },
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum ExportDataset {
+    Trades,
+    Orderbooks,
+    Both,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -46,6 +72,25 @@ async fn main() -> Result<()> {
 
     let database_url = std::env::var("DATABASE_URL").wrap_err("DATABASE_URL must be set")?;
     let args = IngestorConfig::parse();
+
+    if let Some(Command::Export {
+        output_dir,
+        symbols,
+        dataset,
+    }) = args.command
+    {
+        return tokio::task::spawn_blocking(move || {
+            lighter_timescaledb_rs::export::export_parquet(
+                &database_url,
+                &output_dir,
+                &symbols,
+                matches!(dataset, ExportDataset::Trades | ExportDataset::Both),
+                matches!(dataset, ExportDataset::Orderbooks | ExportDataset::Both),
+            )
+        })
+        .await
+        .wrap_err("waiting for Parquet export")?;
+    }
 
     let mut conn = lighter_timescaledb_rs::establish_postgres_connection(&database_url)
         .wrap_err("connecting to postgres")?;

@@ -6,6 +6,7 @@ use tracing::info;
 
 use models::NewSymbol;
 
+pub mod export;
 pub mod models;
 pub mod schema;
 pub mod ws;

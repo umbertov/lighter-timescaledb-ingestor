@@ -30,6 +30,27 @@ Start the ingestor after you apply the migrations:
 nix run .#up
 ```
 
+## Export data
+
+Export all trades and order-book messages to Parquet files:
+
+```sh
+cargo run -- export --output-dir ./export
+```
+
+Export one ticker or a group of tickers. Repeat `--symbol` for each ticker name:
+
+```sh
+cargo run -- export --output-dir ./export --symbol BTC --symbol ETH
+```
+
+Select one dataset with `--dataset trades` or `--dataset orderbooks`. The default is `both`.
+The export includes the ticker name in the `symbol` column. It does not include the database symbol ID.
+The command writes `trades.parquet` and `orderbook_messages.parquet` when it selects both datasets.
+The command writes batches of 8,192 rows. It does not load a full table into memory.
+Order-book bid and ask arrays use JSON strings in Parquet.
+The command fails if an output file already exists. Choose an empty output directory for each export.
+
 The `up` command builds and loads the flake Docker image, then starts the ingestor and TimescaleDB.
 Run `nix run .#compose -- down` to stop the services.
 Run Nix commands from the project root. Docker must be installed and its daemon must run.
