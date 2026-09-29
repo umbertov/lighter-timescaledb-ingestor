@@ -6,6 +6,7 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 
 - Symbol records store the Lighter market ID and market type.
 - Trades and order-book messages use TimescaleDB hypertables.
+- Accept the documented trade types: `trade`, `liquidation`, `deleverage`, and `market-settlement`.
 - Store order-book bids and asks as JSONB price-level arrays.
 - Use `lighter_market_id` as the symbol upsert conflict key.
 - Export Parquet data through the `export` command. Use the ticker name in the exported `symbol` column.

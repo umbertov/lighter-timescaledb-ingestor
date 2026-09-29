@@ -103,4 +103,42 @@ mod tests {
         assert_eq!(trades[0].price, "2750.40");
         assert!(liquidation_trades.is_empty());
     }
+
+    #[test]
+    fn parses_all_documented_trade_types() {
+        let trade_types = ["trade", "liquidation", "deleverage", "market-settlement"];
+
+        for trade_type in trade_types {
+            let value = serde_json::json!({
+                "type": "update/trade",
+                "channel": "trade:0",
+                "nonce": 1,
+                "trades": [{
+                    "trade_id": 1,
+                    "tx_hash": "hash",
+                    "type": trade_type,
+                    "market_id": 0,
+                    "size": "1",
+                    "price": "1",
+                    "usd_amount": "1",
+                    "ask_id": 1,
+                    "bid_id": 2,
+                    "ask_client_id": 1,
+                    "bid_client_id": 2,
+                    "ask_account_id": 1,
+                    "bid_account_id": 2,
+                    "is_maker_ask": false,
+                    "block_height": 1,
+                    "timestamp": 1
+                }],
+                "liquidation_trades": []
+            });
+
+            let parsed: TradeWsMessage = serde_json::from_value(value).unwrap();
+            let TradeWsMessage::Update { trades, .. } = parsed else {
+                panic!("expected Update");
+            };
+            assert_eq!(trades[0].trade_type, trade_type);
+        }
+    }
 }
