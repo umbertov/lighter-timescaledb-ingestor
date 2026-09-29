@@ -4,7 +4,8 @@ This Rust service stores Lighter market data in TimescaleDB. It syncs market sym
 
 ## Status
 
-The service supports perpetual and spot markets. It stores trade and liquidation events in `trades`, with a trade type for each row. It stores order-book updates as JSONB price levels. It detects order-book gaps with the nonce chain and reconnects when a gap occurs.
+The service supports perpetual and spot markets. It stores trade and liquidation events in `trades`, with a trade type for each row. It stores order-book updates as JSONB price levels. It detects order-book gaps with the nonce chain and reconnects when a gap occurs. It also reconnects after WebSocket read failures.
+Container uptime does not guarantee that the WebSocket stays connected. The service logs failures and reconnects.
 
 Private account fills are out of scope until the trading client uses Lighter.
 

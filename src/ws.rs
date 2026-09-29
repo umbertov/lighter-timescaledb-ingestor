@@ -26,7 +26,6 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
 
 const BATCH_CAPACITY: usize = 128;
-const SUBSCRIBE_PACING: Duration = Duration::from_millis(100);
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// The server's reverse proxy enforces a read deadline on the
 /// client->server direction: confirmed by capturing repeated
@@ -134,9 +133,12 @@ pub async fn run_ws_ingestion(
 ) -> Result<()> {
     let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url)
         .await
-        .wrap_err_with(|| format!("connecting to {ws_url}"))?;
+        .wrap_err("connecting to the market-data WebSocket")?;
+    info!("connected to the market-data WebSocket");
     let (mut write, mut read) = ws_stream.split();
 
+    // The official Python client sends subscriptions without a delay.
+    // Per-channel pacing added about 17 seconds to each reconnect for 84 markets.
     for market_id in market_ids {
         for channel in [
             format!("order_book/{market_id}"),
@@ -147,11 +149,10 @@ pub async fn run_ws_ingestion(
                 .send(Message::Text(sub.to_string()))
                 .await
                 .wrap_err_with(|| format!("subscribing to {channel}"))?;
-            tokio::time::sleep(SUBSCRIBE_PACING).await;
         }
     }
     info!(
-        "subscribed to order_book and trade channels for {} markets",
+        "sent order_book and trade subscriptions for {} markets",
         market_ids.len()
     );
 
@@ -235,13 +236,16 @@ async fn handle_orderbook_frame(
             order_book,
             ..
         } => {
-            if let Some(&prev_nonce) = last_nonce.get(&market_id) {
-                if order_book.begin_nonce != prev_nonce {
-                    return Err(eyre!(
-                        "order_book gap for market_id {market_id}: begin_nonce {} != last nonce {prev_nonce}",
-                        order_book.begin_nonce
-                    ));
-                }
+            let Some(&prev_nonce) = last_nonce.get(&market_id) else {
+                return Err(eyre!(
+                    "order_book delta arrived before snapshot for market_id {market_id}"
+                ));
+            };
+            if order_book.begin_nonce != prev_nonce {
+                return Err(eyre!(
+                    "order_book gap for market_id {market_id}: begin_nonce {} != last nonce {prev_nonce}",
+                    order_book.begin_nonce
+                ));
             }
             last_nonce.insert(market_id, order_book.nonce);
             orderbook_row(symbol, "delta", last_updated_at, &order_book)?

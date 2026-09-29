@@ -95,104 +95,88 @@ fn export_trades(client: &mut Client, path: std::path::PathBuf, filter: &str) ->
     let mut writer = parquet_writer(&path, schema.clone())?;
     let sql = format!("SELECT t.time, s.name, t.lighter_trade_id, t.price, t.size, t.is_maker_ask, t.trade_type FROM trades t JOIN symbols s ON s.id = t.symbol{filter} ORDER BY t.time, t.id");
     let mut rows = client.query_raw(&sql, std::iter::empty::<&str>())?;
-    let mut times = Vec::with_capacity(BATCH_SIZE);
-    let mut symbols = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 8);
-    let mut ids = Int64Builder::with_capacity(BATCH_SIZE);
-    let mut prices = Float64Builder::with_capacity(BATCH_SIZE);
-    let mut sizes = Float64Builder::with_capacity(BATCH_SIZE);
-    let mut makers = BooleanBuilder::with_capacity(BATCH_SIZE);
-    let mut kinds = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 12);
+    let mut batch = TradeBatch::new();
     while let Some(row) = rows.next()? {
-        push_trade(
-            &row,
-            &mut times,
-            &mut symbols,
-            &mut ids,
-            &mut prices,
-            &mut sizes,
-            &mut makers,
-            &mut kinds,
-        );
-        if times.len() == BATCH_SIZE {
-            write_trade_batch(
-                &mut writer,
-                &schema,
-                &mut times,
-                &mut symbols,
-                &mut ids,
-                &mut prices,
-                &mut sizes,
-                &mut makers,
-                &mut kinds,
-            )?;
+        batch.push(&row);
+        if batch.len() == BATCH_SIZE {
+            batch.write(&mut writer, &schema)?;
         }
     }
-    if !times.is_empty() {
-        write_trade_batch(
-            &mut writer,
-            &schema,
-            &mut times,
-            &mut symbols,
-            &mut ids,
-            &mut prices,
-            &mut sizes,
-            &mut makers,
-            &mut kinds,
-        )?;
+    if !batch.is_empty() {
+        batch.write(&mut writer, &schema)?;
     }
     writer.close().wrap_err("closing trades Parquet file")?;
     Ok(())
 }
 
-fn push_trade(
-    row: &Row,
-    times: &mut Vec<i64>,
-    symbols: &mut StringBuilder,
-    ids: &mut Int64Builder,
-    prices: &mut Float64Builder,
-    sizes: &mut Float64Builder,
-    makers: &mut BooleanBuilder,
-    kinds: &mut StringBuilder,
-) {
-    times.push(
-        row.get::<_, chrono::DateTime<chrono::Utc>>(0)
-            .timestamp_micros(),
-    );
-    symbols.append_value(row.get::<_, String>(1));
-    ids.append_value(row.get(2));
-    prices.append_value(row.get(3));
-    sizes.append_value(row.get(4));
-    makers.append_value(row.get(5));
-    kinds.append_value(row.get::<_, String>(6));
+struct TradeBatch {
+    times: Vec<i64>,
+    symbols: StringBuilder,
+    ids: Int64Builder,
+    prices: Float64Builder,
+    sizes: Float64Builder,
+    makers: BooleanBuilder,
+    kinds: StringBuilder,
 }
 
-fn write_trade_batch(
-    writer: &mut ArrowWriter<std::fs::File>,
-    schema: &Arc<Schema>,
-    times: &mut Vec<i64>,
-    symbols: &mut StringBuilder,
-    ids: &mut Int64Builder,
-    prices: &mut Float64Builder,
-    sizes: &mut Float64Builder,
-    makers: &mut BooleanBuilder,
-    kinds: &mut StringBuilder,
-) -> Result<()> {
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(TimestampMicrosecondArray::from(std::mem::take(times)).with_timezone("UTC"))
-                as ArrayRef,
-            Arc::new(symbols.finish()),
-            Arc::new(ids.finish()),
-            Arc::new(prices.finish()),
-            Arc::new(sizes.finish()),
-            Arc::new(makers.finish()),
-            Arc::new(kinds.finish()),
-        ],
-    )?;
-    writer
-        .write(&batch)
-        .wrap_err("writing trades Parquet batch")
+impl TradeBatch {
+    fn new() -> Self {
+        Self {
+            times: Vec::with_capacity(BATCH_SIZE),
+            symbols: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 8),
+            ids: Int64Builder::with_capacity(BATCH_SIZE),
+            prices: Float64Builder::with_capacity(BATCH_SIZE),
+            sizes: Float64Builder::with_capacity(BATCH_SIZE),
+            makers: BooleanBuilder::with_capacity(BATCH_SIZE),
+            kinds: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 12),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.times.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.times.is_empty()
+    }
+
+    fn push(&mut self, row: &Row) {
+        self.times.push(
+            row.get::<_, chrono::DateTime<chrono::Utc>>(0)
+                .timestamp_micros(),
+        );
+        self.symbols.append_value(row.get::<_, String>(1));
+        self.ids.append_value(row.get(2));
+        self.prices.append_value(row.get(3));
+        self.sizes.append_value(row.get(4));
+        self.makers.append_value(row.get(5));
+        self.kinds.append_value(row.get::<_, String>(6));
+    }
+
+    fn write(
+        &mut self,
+        writer: &mut ArrowWriter<std::fs::File>,
+        schema: &Arc<Schema>,
+    ) -> Result<()> {
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(
+                    TimestampMicrosecondArray::from(std::mem::take(&mut self.times))
+                        .with_timezone("UTC"),
+                ) as ArrayRef,
+                Arc::new(self.symbols.finish()),
+                Arc::new(self.ids.finish()),
+                Arc::new(self.prices.finish()),
+                Arc::new(self.sizes.finish()),
+                Arc::new(self.makers.finish()),
+                Arc::new(self.kinds.finish()),
+            ],
+        )?;
+        writer
+            .write(&batch)
+            .wrap_err("writing trades Parquet batch")
+    }
 }
 
 fn export_orderbooks(client: &mut Client, path: std::path::PathBuf, filter: &str) -> Result<()> {
@@ -211,74 +195,85 @@ fn export_orderbooks(client: &mut Client, path: std::path::PathBuf, filter: &str
     let mut writer = parquet_writer(&path, schema.clone())?;
     let sql = format!("SELECT o.time, s.name, o.message_type, o.sequence, o.bids, o.asks FROM orderbook_messages o JOIN symbols s ON s.id = o.symbol{filter} ORDER BY o.time, o.id");
     let mut rows = client.query_raw(&sql, std::iter::empty::<&str>())?;
-    let mut times = Vec::with_capacity(BATCH_SIZE);
-    let mut symbols = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 8);
-    let mut types = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 8);
-    let mut sequences = Int64Builder::with_capacity(BATCH_SIZE);
-    let mut bids = StringBuilder::new();
-    let mut asks = StringBuilder::new();
+    let mut batch = OrderbookBatch::new();
     while let Some(row) = rows.next()? {
-        times.push(
-            row.get::<_, chrono::DateTime<chrono::Utc>>(0)
-                .timestamp_micros(),
-        );
-        symbols.append_value(row.get::<_, String>(1));
-        types.append_value(row.get::<_, String>(2));
-        sequences.append_option(row.get(3));
-        bids.append_value(serde_json::to_string(&row.get::<_, serde_json::Value>(4))?);
-        asks.append_value(serde_json::to_string(&row.get::<_, serde_json::Value>(5))?);
-        if times.len() == BATCH_SIZE {
-            write_orderbook_batch(
-                &mut writer,
-                &schema,
-                &mut times,
-                &mut symbols,
-                &mut types,
-                &mut sequences,
-                &mut bids,
-                &mut asks,
-            )?;
+        batch.push(&row)?;
+        if batch.len() == BATCH_SIZE {
+            batch.write(&mut writer, &schema)?;
         }
     }
-    if !times.is_empty() {
-        write_orderbook_batch(
-            &mut writer,
-            &schema,
-            &mut times,
-            &mut symbols,
-            &mut types,
-            &mut sequences,
-            &mut bids,
-            &mut asks,
-        )?;
+    if !batch.is_empty() {
+        batch.write(&mut writer, &schema)?;
     }
     writer.close().wrap_err("closing order-book Parquet file")?;
     Ok(())
 }
 
-fn write_orderbook_batch(
-    writer: &mut ArrowWriter<std::fs::File>,
-    schema: &Arc<Schema>,
-    times: &mut Vec<i64>,
-    symbols: &mut StringBuilder,
-    types: &mut StringBuilder,
-    sequences: &mut Int64Builder,
-    bids: &mut StringBuilder,
-    asks: &mut StringBuilder,
-) -> Result<()> {
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(TimestampMicrosecondArray::from(std::mem::take(times)).with_timezone("UTC"))
-                as ArrayRef,
-            Arc::new(symbols.finish()),
-            Arc::new(types.finish()),
-            Arc::new(sequences.finish()),
-            Arc::new(bids.finish()),
-            Arc::new(asks.finish()),
-        ],
-    )?;
-    writer
-        .write(&batch)
-        .wrap_err("writing order-book Parquet batch")
+struct OrderbookBatch {
+    times: Vec<i64>,
+    symbols: StringBuilder,
+    types: StringBuilder,
+    sequences: Int64Builder,
+    bids: StringBuilder,
+    asks: StringBuilder,
+}
+
+impl OrderbookBatch {
+    fn new() -> Self {
+        Self {
+            times: Vec::with_capacity(BATCH_SIZE),
+            symbols: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 8),
+            types: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 8),
+            sequences: Int64Builder::with_capacity(BATCH_SIZE),
+            bids: StringBuilder::new(),
+            asks: StringBuilder::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.times.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.times.is_empty()
+    }
+
+    fn push(&mut self, row: &Row) -> Result<()> {
+        self.times.push(
+            row.get::<_, chrono::DateTime<chrono::Utc>>(0)
+                .timestamp_micros(),
+        );
+        self.symbols.append_value(row.get::<_, String>(1));
+        self.types.append_value(row.get::<_, String>(2));
+        self.sequences.append_option(row.get(3));
+        self.bids
+            .append_value(serde_json::to_string(&row.get::<_, serde_json::Value>(4))?);
+        self.asks
+            .append_value(serde_json::to_string(&row.get::<_, serde_json::Value>(5))?);
+        Ok(())
+    }
+
+    fn write(
+        &mut self,
+        writer: &mut ArrowWriter<std::fs::File>,
+        schema: &Arc<Schema>,
+    ) -> Result<()> {
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(
+                    TimestampMicrosecondArray::from(std::mem::take(&mut self.times))
+                        .with_timezone("UTC"),
+                ) as ArrayRef,
+                Arc::new(self.symbols.finish()),
+                Arc::new(self.types.finish()),
+                Arc::new(self.sequences.finish()),
+                Arc::new(self.bids.finish()),
+                Arc::new(self.asks.finish()),
+            ],
+        )?;
+        writer
+            .write(&batch)
+            .wrap_err("writing order-book Parquet batch")
+    }
 }

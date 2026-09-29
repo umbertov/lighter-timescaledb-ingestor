@@ -109,7 +109,11 @@ async fn main() -> Result<()> {
 
     loop {
         if let Err(e) = ws::run_ws_ingestion(&args.ws_url, &market_ids, &symbol_cache, &tx).await {
-            error!("ws ingestion died: {e}, reconnecting in {RECONNECT_DELAY:?}");
+            error!(
+                error = ?e,
+                reconnect_delay_ms = RECONNECT_DELAY.as_millis(),
+                "WebSocket session failed; reconnecting"
+            );
             tokio::time::sleep(RECONNECT_DELAY).await;
         }
     }
