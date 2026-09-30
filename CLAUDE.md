@@ -31,6 +31,7 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 - Do not log database connection strings.
 - Use fixtures for automated tests that need market data.
 - Do not call the live API repeatedly from a test suite.
+- Build the Compose ingestor image from `Dockerfile` with `nix build .#default`.
 
 ## CI
 
@@ -38,6 +39,7 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 - Run full CI only when Rust, Cargo, Nix, or workflow paths change.
 - Use the same path list for push filters and pull request checks.
 - Limit the Nix package source to Rust build inputs.
+- Build the CI image with `.#docker` and the Nix cache. Do not use `Dockerfile` in CI.
 - Keep pull request checks free of OpenID Connect tokens and package write access.
 - Give OpenID Connect access only to trusted `main` push checks for the Nix cache.
 - Publish images only for pushes to `main`, after checks pass.

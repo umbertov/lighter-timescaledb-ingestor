@@ -1,0 +1,8 @@
+.git
+.env
+.env.*
+.direnv
+.ruff_cache
+target
+export
+research

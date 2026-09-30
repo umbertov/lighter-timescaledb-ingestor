@@ -26,7 +26,11 @@ services:
       start_period: 30s
 
   ingestor:
-    image: ${INGESTOR_IMAGE:?Set INGESTOR_IMAGE}
+    image: ${INGESTOR_IMAGE:-lighter-timescaledb-ingestor:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: build
     restart: unless-stopped
     profiles: ["ingestor"]
     environment:
