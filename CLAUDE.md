@@ -38,4 +38,7 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 - Run full CI only when Rust, Cargo, Nix, or workflow paths change.
 - Use the same path list for push filters and pull request checks.
 - Limit the Nix package source to Rust build inputs.
-- Publish images to GitHub Container Registry only after all checks pass.
+- Keep pull request checks free of OpenID Connect tokens and package write access.
+- Give OpenID Connect access only to trusted `main` push checks for the Nix cache.
+- Publish images only for pushes to `main`, after checks pass.
+- Require a code owner review for changes under `.github/workflows/`.

@@ -72,7 +72,8 @@ cargo build --workspace
 
 The Nix package source contains Rust code and Cargo files. Changes to documentation and Compose files do not rebuild the Rust package.
 Pushes to `main` start CI only when Rust, Cargo, Nix, or workflow files change. Pull requests skip the full checks job when these files do not change.
-Version tags and manual runs execute the full checks job. GitHub Actions checks Rust formatting, runs Clippy, runs workspace tests, and builds the Docker image.
-Pushes to `main` and tags that start with `v` publish the image to GitHub Container Registry.
-The workflow caches Nix store paths between runs and passes the checked image to the publish job as an artifact.
-Main branch pushes publish `latest` and a commit tag. Version tags publish the matching version tag.
+Manual runs execute the full checks without publishing. GitHub Actions checks Rust formatting, runs Clippy, runs workspace tests, and builds the Docker image.
+Pull request checks do not receive an OpenID Connect token or publish images.
+Pushes to `main` run the Nix cache and build the image. A successful `main` push publishes the image.
+The publish job adds the `latest` tag and a commit tag after the checks pass.
+The workflow file has a code owner. Require a code owner review before you merge workflow changes.
