@@ -14,10 +14,12 @@ use std::sync::Arc;
 const BATCH_SIZE: usize = 8_192;
 
 /// Export selected datasets as Parquet files. An empty symbol list means all symbols.
+/// When `hours` is set, only rows from the last `hours` hours are exported.
 pub fn export_parquet(
     database_url: &str,
     output_dir: &Path,
     symbols: &[String],
+    hours: Option<u32>,
     trades: bool,
     orderbooks: bool,
 ) -> Result<()> {
@@ -25,12 +27,14 @@ pub fn export_parquet(
         return Err(eyre!("select at least one dataset"));
     }
     let mut client = Client::connect(database_url, NoTls).wrap_err("connecting to PostgreSQL")?;
-    let filter = symbol_filter(&mut client, symbols)?;
+    let symbol_condition = symbol_condition(&mut client, symbols)?;
     fs::create_dir_all(output_dir).wrap_err("creating export directory")?;
     if trades {
+        let filter = where_clause(&symbol_condition, hours, "t.time");
         export_trades(&mut client, output_dir.join("trades.parquet"), &filter)?;
     }
     if orderbooks {
+        let filter = where_clause(&symbol_condition, hours, "o.time");
         export_orderbooks(
             &mut client,
             output_dir.join("orderbook_messages.parquet"),
@@ -40,7 +44,23 @@ pub fn export_parquet(
     Ok(())
 }
 
-fn symbol_filter(client: &mut Client, symbols: &[String]) -> Result<String> {
+/// Joins the symbol and time conditions into one `WHERE` clause. Returns an empty string when neither applies.
+fn where_clause(symbol_condition: &str, hours: Option<u32>, time_column: &str) -> String {
+    let mut conditions = Vec::new();
+    if !symbol_condition.is_empty() {
+        conditions.push(symbol_condition.to_owned());
+    }
+    if let Some(hours) = hours {
+        conditions.push(format!("{time_column} >= now() - interval '{hours} hours'"));
+    }
+    if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", conditions.join(" AND "))
+    }
+}
+
+fn symbol_condition(client: &mut Client, symbols: &[String]) -> Result<String> {
     if symbols.is_empty() {
         return Ok(String::new());
     }
@@ -62,7 +82,7 @@ fn symbol_filter(client: &mut Client, symbols: &[String]) -> Result<String> {
         .map(|name| format!("'{}'", name.replace('\'', "''")))
         .collect::<Vec<_>>()
         .join(", ");
-    Ok(format!(" WHERE s.name IN ({names})"))
+    Ok(format!("s.name IN ({names})"))
 }
 
 fn parquet_writer(path: &Path, schema: Arc<Schema>) -> Result<ArrowWriter<std::fs::File>> {

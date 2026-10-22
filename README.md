@@ -45,6 +45,14 @@ Export one ticker or a group of tickers. Repeat `--symbol` for each ticker name:
 cargo run -- export --output-dir ./export --symbol BTC --symbol ETH
 ```
 
+Export only the last N hours. For example, this command exports the last 2 days:
+
+```sh
+cargo run -- export --output-dir ./export --hours 48
+```
+
+The `--hours` value must be at least 1. Combine it with `--symbol` and `--dataset`.
+
 Select one dataset with `--dataset trades` or `--dataset orderbooks`. The default is `both`.
 The export includes the ticker name in the `symbol` column. It does not include the database symbol ID.
 The command writes `trades.parquet` and `orderbook_messages.parquet` when it selects both datasets.

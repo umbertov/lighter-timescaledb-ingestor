@@ -54,6 +54,9 @@ enum Command {
         /// Export trades, order books, or both.
         #[arg(long, value_enum, default_value = "both")]
         dataset: ExportDataset,
+        /// Export only rows from the last N hours. Omit this option to export all rows.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        hours: Option<u32>,
     },
 }
 
@@ -77,6 +80,7 @@ async fn main() -> Result<()> {
         output_dir,
         symbols,
         dataset,
+        hours,
     }) = args.command
     {
         return tokio::task::spawn_blocking(move || {
@@ -84,6 +88,7 @@ async fn main() -> Result<()> {
                 &database_url,
                 &output_dir,
                 &symbols,
+                hours,
                 matches!(dataset, ExportDataset::Trades | ExportDataset::Both),
                 matches!(dataset, ExportDataset::Orderbooks | ExportDataset::Both),
             )

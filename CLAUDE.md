@@ -10,6 +10,7 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 - Store order-book bids and asks as JSONB price-level arrays.
 - Use `lighter_market_id` as the symbol upsert conflict key.
 - Export Parquet data through the `export` command. Use the ticker name in the exported `symbol` column.
+- The `export --hours N` option limits rows to the last N hours using `now() - interval`. Its value must be at least 1.
 - Stream query results into bounded Arrow batches. Do not load full hypertables into memory.
 - Check `lighter-rs-types` before you add Lighter message shapes.
 
