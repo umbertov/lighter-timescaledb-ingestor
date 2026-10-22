@@ -57,6 +57,9 @@ enum Command {
         /// Export only rows from the last N hours. Omit this option to export all rows.
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
         hours: Option<u32>,
+        /// Fail when an output Parquet file already exists. By default, existing files are replaced.
+        #[arg(long)]
+        no_overwrite: bool,
     },
 }
 
@@ -81,6 +84,7 @@ async fn main() -> Result<()> {
         symbols,
         dataset,
         hours,
+        no_overwrite,
     }) = args.command
     {
         return tokio::task::spawn_blocking(move || {
@@ -91,6 +95,7 @@ async fn main() -> Result<()> {
                 hours,
                 matches!(dataset, ExportDataset::Trades | ExportDataset::Both),
                 matches!(dataset, ExportDataset::Orderbooks | ExportDataset::Both),
+                !no_overwrite,
             )
         })
         .await

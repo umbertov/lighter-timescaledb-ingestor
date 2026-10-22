@@ -22,24 +22,33 @@ pub fn export_parquet(
     hours: Option<u32>,
     trades: bool,
     orderbooks: bool,
+    overwrite: bool,
 ) -> Result<()> {
     if !trades && !orderbooks {
         return Err(eyre!("select at least one dataset"));
+    }
+    let trades_path = output_dir.join("trades.parquet");
+    let orderbooks_path = output_dir.join("orderbook_messages.parquet");
+    if !overwrite {
+        for (selected, path) in [(trades, &trades_path), (orderbooks, &orderbooks_path)] {
+            if selected && path.exists() {
+                return Err(eyre!(
+                    "{} already exists; remove it or omit --no-overwrite",
+                    path.display()
+                ));
+            }
+        }
     }
     let mut client = Client::connect(database_url, NoTls).wrap_err("connecting to PostgreSQL")?;
     let symbol_condition = symbol_condition(&mut client, symbols)?;
     fs::create_dir_all(output_dir).wrap_err("creating export directory")?;
     if trades {
         let filter = where_clause(&symbol_condition, hours, "t.time");
-        export_trades(&mut client, output_dir.join("trades.parquet"), &filter)?;
+        export_trades(&mut client, &trades_path, &filter, overwrite)?;
     }
     if orderbooks {
         let filter = where_clause(&symbol_condition, hours, "o.time");
-        export_orderbooks(
-            &mut client,
-            output_dir.join("orderbook_messages.parquet"),
-            &filter,
-        )?;
+        export_orderbooks(&mut client, &orderbooks_path, &filter, overwrite)?;
     }
     Ok(())
 }
@@ -85,10 +94,19 @@ fn symbol_condition(client: &mut Client, symbols: &[String]) -> Result<String> {
     Ok(format!("s.name IN ({names})"))
 }
 
-fn parquet_writer(path: &Path, schema: Arc<Schema>) -> Result<ArrowWriter<std::fs::File>> {
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+fn parquet_writer(
+    path: &Path,
+    schema: Arc<Schema>,
+    overwrite: bool,
+) -> Result<ArrowWriter<std::fs::File>> {
+    let mut options = OpenOptions::new();
+    options.write(true);
+    if overwrite {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    let file = options
         .open(path)
         .wrap_err_with(|| format!("creating {}", path.display()))?;
     let properties = WriterProperties::builder()
@@ -98,7 +116,7 @@ fn parquet_writer(path: &Path, schema: Arc<Schema>) -> Result<ArrowWriter<std::f
     ArrowWriter::try_new(file, schema, Some(properties)).wrap_err("creating Parquet writer")
 }
 
-fn export_trades(client: &mut Client, path: std::path::PathBuf, filter: &str) -> Result<()> {
+fn export_trades(client: &mut Client, path: &Path, filter: &str, overwrite: bool) -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "time",
@@ -112,7 +130,7 @@ fn export_trades(client: &mut Client, path: std::path::PathBuf, filter: &str) ->
         Field::new("is_maker_ask", DataType::Boolean, false),
         Field::new("trade_type", DataType::Utf8, false),
     ]));
-    let mut writer = parquet_writer(&path, schema.clone())?;
+    let mut writer = parquet_writer(path, schema.clone(), overwrite)?;
     let sql = format!("SELECT t.time, s.name, t.lighter_trade_id, t.price, t.size, t.is_maker_ask, t.trade_type FROM trades t JOIN symbols s ON s.id = t.symbol{filter} ORDER BY t.time, t.id");
     let mut rows = client.query_raw(&sql, std::iter::empty::<&str>())?;
     let mut batch = TradeBatch::new();
@@ -199,7 +217,12 @@ impl TradeBatch {
     }
 }
 
-fn export_orderbooks(client: &mut Client, path: std::path::PathBuf, filter: &str) -> Result<()> {
+fn export_orderbooks(
+    client: &mut Client,
+    path: &Path,
+    filter: &str,
+    overwrite: bool,
+) -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "time",
@@ -212,7 +235,7 @@ fn export_orderbooks(client: &mut Client, path: std::path::PathBuf, filter: &str
         Field::new("bids", DataType::Utf8, false),
         Field::new("asks", DataType::Utf8, false),
     ]));
-    let mut writer = parquet_writer(&path, schema.clone())?;
+    let mut writer = parquet_writer(path, schema.clone(), overwrite)?;
     let sql = format!("SELECT o.time, s.name, o.message_type, o.sequence, o.bids, o.asks FROM orderbook_messages o JOIN symbols s ON s.id = o.symbol{filter} ORDER BY o.time, o.id");
     let mut rows = client.query_raw(&sql, std::iter::empty::<&str>())?;
     let mut batch = OrderbookBatch::new();

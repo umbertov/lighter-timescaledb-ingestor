@@ -58,7 +58,7 @@ The export includes the ticker name in the `symbol` column. It does not include 
 The command writes `trades.parquet` and `orderbook_messages.parquet` when it selects both datasets.
 The command writes batches of 8,192 rows. It does not load a full table into memory.
 Order-book bid and ask arrays use JSON strings in Parquet.
-The command fails if an output file already exists. Choose an empty output directory for each export.
+By default, the command replaces existing output files. Add `--no-overwrite` to stop with an error when an output file exists. The command checks all output files before it reads any data.
 
 The `up` command runs Docker Compose with `--build`. Compose builds the ingestor image with `Dockerfile`.
 The Dockerfile builds the Nix default package and copies its binary into a small runtime image.
