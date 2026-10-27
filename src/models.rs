@@ -51,4 +51,6 @@ pub struct OrderbookMessageRow {
     pub sequence: Option<i64>,
     pub bids: serde_json::Value,
     pub asks: serde_json::Value,
+    /// The nonce that a delta continues from. `None` for a snapshot.
+    pub begin_nonce: Option<i64>,
 }

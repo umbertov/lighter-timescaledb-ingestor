@@ -229,7 +229,7 @@ async fn handle_orderbook_frame(
             ..
         } => {
             last_nonce.insert(market_id, order_book.nonce);
-            orderbook_row(symbol, "snapshot", last_updated_at, &order_book)?
+            orderbook_row(symbol, "snapshot", None, last_updated_at, &order_book)?
         }
         OrderBookWsMessage::Update {
             last_updated_at,
@@ -248,7 +248,13 @@ async fn handle_orderbook_frame(
                 ));
             }
             last_nonce.insert(market_id, order_book.nonce);
-            orderbook_row(symbol, "delta", last_updated_at, &order_book)?
+            orderbook_row(
+                symbol,
+                "delta",
+                Some(order_book.begin_nonce),
+                last_updated_at,
+                &order_book,
+            )?
         }
     };
 
@@ -260,6 +266,7 @@ async fn handle_orderbook_frame(
 fn orderbook_row(
     symbol: i32,
     message_type: &str,
+    begin_nonce: Option<i64>,
     last_updated_at: i64,
     order_book: &lighter_rs_types::orderbook::OrderBookSideLevels,
 ) -> Result<OrderbookMessageRow> {
@@ -270,6 +277,7 @@ fn orderbook_row(
         sequence: Some(order_book.nonce),
         bids: serde_json::to_value(&order_book.bids).wrap_err("serializing bids")?,
         asks: serde_json::to_value(&order_book.asks).wrap_err("serializing asks")?,
+        begin_nonce,
     })
 }
 

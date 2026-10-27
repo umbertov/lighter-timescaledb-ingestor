@@ -18,6 +18,7 @@ diesel::table! {
         sequence -> Nullable<Int8>,
         bids -> Jsonb,
         asks -> Jsonb,
+        begin_nonce -> Nullable<Int8>,
     }
 }
 
