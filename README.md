@@ -48,11 +48,33 @@ The poller waits 1.1 seconds after each request. This keeps a Standard account u
 
 A failed request, a malformed response, or a database error stops the poller and exits the process. Docker Compose restarts the service because the `ingestor` service sets `restart: unless-stopped`.
 
+This fail-fast behavior is deliberate. The poller does not retry in the process. The exit also stops the WebSocket ingestion until the container restarts. After the restart, the poller continues after the newest stored settlement of each market, so the restart does not lose or duplicate rows. Check the container restart count to find repeated poller failures.
+
 Query the newest stored settlement for one market:
 
 ```sql
 SELECT max(time) FROM funding_rates WHERE symbol = (SELECT id FROM symbols WHERE name = 'NVDA' AND market_type = 'perp');
 ```
+
+## Order-book rows
+
+Each `orderbook_messages` row stores the nonce after the message in `sequence`. A `delta` row also stores `begin_nonce`, the nonce that the delta continues from. A `snapshot` row stores `NULL` in `begin_nonce`. Rows written before the `begin_nonce` migration also store `NULL`.
+
+In one connection, the `begin_nonce` of a delta equals the `sequence` of the previous row of the same symbol. Each connection starts with a `snapshot` row. If a delta row has a `begin_nonce` that differs from the previous `sequence`, a delta is missing.
+
+The Parquet export does not include `begin_nonce`.
+
+## Deploy
+
+1. Apply the new migrations in this order, before you start the new image:
+   1. `migrations/2026-10-27-000005_funding_rates`
+   2. `migrations/2026-10-27-000006_orderbook_begin_nonce`
+2. Set the new environment values for the `ingestor` service:
+   - `LIGHTER_FUNDING_POLL_INTERVAL_SECS`
+   - `LIGHTER_FUNDING_BACKFILL_START`
+3. Start the new image.
+
+Choose `LIGHTER_FUNDING_BACKFILL_START` deliberately. The poller uses it only for a market with no stored funding. After the first run, a change to the value has no effect on markets that have rows. An early start makes more requests at the first start: one request for each 750 settlements of each perp market, with 1.1 seconds between requests.
 
 ## Export data
 
