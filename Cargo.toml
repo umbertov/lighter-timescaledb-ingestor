@@ -15,6 +15,7 @@ strip = true
 [dependencies]
 clap = { version = "4.4.*", features = ["derive", "env"] }
 color-eyre = "0.6.5"
+bigdecimal = "0.4"
 diesel = { version = "2.*.*", features = ["postgres", "numeric", "chrono", "r2d2", "serde_json"] }
 dotenv = "0.*"
 futures = "0.3.*"
