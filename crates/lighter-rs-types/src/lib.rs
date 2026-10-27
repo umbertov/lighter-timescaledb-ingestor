@@ -13,6 +13,7 @@
 //! add a field or message shape you have not actually observed; an
 //! unverified guess here silently propagates into every consumer.
 pub mod account;
+pub mod funding;
 pub mod market;
 pub mod orderbook;
 pub mod trade;
@@ -21,6 +22,7 @@ pub mod trade_ws;
 pub use account::{
     AccountAllWsMessage, AccountPosition, DetailedAccount, DetailedAccountsResponse,
 };
+pub use funding::{Funding, FundingsResponse};
 pub use market::{OrderBookInfo, OrderBooksResponse};
 pub use orderbook::{OrderBookSideLevels, OrderBookWsMessage, PriceLevel};
 pub use trade::{Trade, TradesResponse};
