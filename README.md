@@ -43,7 +43,11 @@ nix run .#up
 
 The poller runs after the symbol sync. For each perp market, it requests `/api/v1/fundings` with `resolution=1h`. It starts after the newest stored settlement, or at the backfill start when the market has no stored funding. It stores each row with `ON CONFLICT (symbol, time) DO NOTHING`, so restarts do not duplicate rows.
 
-Each `funding_rates` row holds one settlement: `time` is the settlement time, `rate` is the exact decimal from Lighter, and `direction` is Lighter's direction string. The `value` field from the API is not stored because the docs do not define it.
+Each `funding_rates` row holds one settlement: `time` is the settlement time, `rate` is the exact decimal from Lighter, and `direction` is Lighter's direction string. The docs define neither field. A comparison with the funding payments of a real account (2026-10-27, 1463 hourly payments) shows:
+
+- `rate` is a non-negative percentage per hour. The fraction is `rate / 100`.
+- `direction` names the side that pays: `long` means longs pay shorts, `short` means shorts pay longs.
+- The API field `value` is mark price × `rate` / 100, the funding per one base unit. It is not stored, because it follows from `rate` and the mark.
 
 The poller waits 1.1 seconds after each request. This keeps a Standard account under its 60 requests per minute REST limit. The API returns at most 750 rows per call, and the poller pages through a full page.
 
