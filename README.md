@@ -27,10 +27,11 @@ nix run .#compose -- up -d db
 
 Apply each `migrations/*/up.sql` file in timestamp order or use Diesel CLI. The `DATABASE_URL` value in `.env` connects from the host.
 
-The ingestor requires two funding settings. It stops at startup when either one is missing:
+The ingestor requires three settings. It stops at startup when one is missing:
 
 - `LIGHTER_FUNDING_POLL_INTERVAL_SECS`: seconds between funding polls, a whole number of at least 1.
 - `LIGHTER_FUNDING_BACKFILL_START`: the first settlement to collect for a market with no stored funding, in RFC 3339 UTC, for example `2026-01-01T00:00:00Z`.
+- `LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS`: seconds between periodic order-book snapshot rows for each market, a whole number of at least 1. For example, `600` writes a snapshot every 10 minutes.
 
 Start the ingestor after you apply the migrations:
 
@@ -62,6 +63,10 @@ Each `orderbook_messages` row stores the nonce after the message in `sequence`. 
 
 In one connection, the `begin_nonce` of a delta equals the `sequence` of the previous row of the same symbol. Each connection starts with a `snapshot` row. If a delta row has a `begin_nonce` that differs from the previous `sequence`, a delta is missing.
 
+The ingestor keeps an in-memory book for each market. A connect snapshot sets the book. Each delta updates it after the nonce check: a level with size zero, in any form such as `0` or `0.0000`, removes the price level, and any other size replaces it. Prices and sizes stay exact decimal strings. A reconnect discards all books.
+
+Every `LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS` seconds, the ingestor writes a `snapshot` row for each market from that book. The row has the `sequence` of the last delta and `NULL` in `begin_nonce`. It equals the book after that delta. Bids are in descending price order, asks in ascending price order. The row `time` is the write time, not a Lighter time. To rebuild a book, start from the newest snapshot of a symbol, then apply the deltas with a larger `sequence` in `sequence` order.
+
 The Parquet export does not include `begin_nonce`.
 
 ## Deploy
@@ -72,6 +77,7 @@ The Parquet export does not include `begin_nonce`.
 2. Set the new environment values for the `ingestor` service:
    - `LIGHTER_FUNDING_POLL_INTERVAL_SECS`
    - `LIGHTER_FUNDING_BACKFILL_START`
+   - `LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS`, for example `600`
 3. Start the new image.
 
 Choose `LIGHTER_FUNDING_BACKFILL_START` deliberately. The poller uses it only for a market with no stored funding. After the first run, a change to the value has no effect on markets that have rows. An early start makes more requests at the first start: one request for each 750 settlements of each perp market, with 1.1 seconds between requests.

@@ -8,6 +8,7 @@ use tracing::info;
 
 use models::NewSymbol;
 
+pub mod book;
 pub mod export;
 pub mod funding;
 pub mod models;

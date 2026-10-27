@@ -54,6 +54,15 @@ struct IngestorConfig {
     /// Required when no subcommand runs.
     #[arg(long, env = "LIGHTER_FUNDING_BACKFILL_START")]
     funding_backfill_start: Option<DateTime<Utc>>,
+
+    /// Seconds between periodic order-book snapshot rows for each market.
+    /// Required when no subcommand runs.
+    #[arg(
+        long,
+        env = "LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    orderbook_snapshot_interval_secs: Option<u64>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -117,13 +126,16 @@ async fn main() -> Result<()> {
         .wrap_err("waiting for Parquet export")?;
     }
 
-    let (Some(poll_interval_secs), Some(backfill_start)) =
-        (args.funding_poll_interval_secs, args.funding_backfill_start)
-    else {
+    let (Some(poll_interval_secs), Some(backfill_start), Some(snapshot_interval_secs)) = (
+        args.funding_poll_interval_secs,
+        args.funding_backfill_start,
+        args.orderbook_snapshot_interval_secs,
+    ) else {
         return Err(eyre!(
-            "LIGHTER_FUNDING_POLL_INTERVAL_SECS and LIGHTER_FUNDING_BACKFILL_START must be set"
+            "LIGHTER_FUNDING_POLL_INTERVAL_SECS, LIGHTER_FUNDING_BACKFILL_START and LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS must be set"
         ));
     };
+    let snapshot_interval = Duration::from_secs(snapshot_interval_secs);
 
     let mut conn = lighter_timescaledb_rs::establish_postgres_connection(&database_url)
         .wrap_err("connecting to postgres")?;
@@ -160,7 +172,15 @@ async fn main() -> Result<()> {
     });
 
     loop {
-        if let Err(e) = ws::run_ws_ingestion(&args.ws_url, &market_ids, &symbol_cache, &tx).await {
+        if let Err(e) = ws::run_ws_ingestion(
+            &args.ws_url,
+            &market_ids,
+            &symbol_cache,
+            snapshot_interval,
+            &tx,
+        )
+        .await
+        {
             error!(
                 error = ?e,
                 reconnect_delay_ms = RECONNECT_DELAY.as_millis(),

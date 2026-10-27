@@ -9,6 +9,7 @@
 //! "kill the connection and restart" recovery
 //! `bybit-timescaledb-ingestor`'s `crawler_thread` uses, rather than an
 //! in-stream resync.
+use crate::book::Book;
 use crate::models::{OrderbookMessageRow, TradeRow};
 use crate::{insert_orderbook_messages, insert_trades};
 use chrono::{DateTime, Utc};
@@ -16,7 +17,7 @@ use color_eyre::eyre::{eyre, Result, WrapErr};
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::PgConnection;
 use futures::{SinkExt, StreamExt};
-use lighter_rs_types::orderbook::OrderBookWsMessage;
+use lighter_rs_types::orderbook::{OrderBookSideLevels, OrderBookWsMessage};
 use lighter_rs_types::trade::Trade;
 use lighter_rs_types::trade_ws::TradeWsMessage;
 use std::collections::HashMap;
@@ -129,6 +130,7 @@ pub async fn run_ws_ingestion(
     ws_url: &str,
     market_ids: &[i32],
     symbol_cache: &HashMap<i32, i32>,
+    snapshot_interval: Duration,
     tx: &mpsc::Sender<WriteMsg>,
 ) -> Result<()> {
     let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url)
@@ -159,7 +161,10 @@ pub async fn run_ws_ingestion(
     // Fresh on every reconnect: a gap detected against a nonce from a
     // previous connection would be meaningless, since the server just
     // sent a brand-new snapshot for every market.
-    let mut last_nonce: HashMap<i32, i64> = HashMap::new();
+    let mut markets: HashMap<i32, MarketBook> = HashMap::new();
+
+    let mut snapshot_timer = tokio::time::interval(snapshot_interval);
+    snapshot_timer.tick().await; // first tick fires immediately; discard it
 
     let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
     keepalive.tick().await; // first tick fires immediately; discard it
@@ -182,7 +187,7 @@ pub async fn run_ws_ingestion(
                 let ty = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
                 if ty.ends_with("order_book") {
-                    handle_orderbook_frame(value, symbol_cache, &mut last_nonce, tx).await?;
+                    handle_orderbook_frame(value, symbol_cache, &mut markets, tx).await?;
                 } else if ty.ends_with("trade") {
                     handle_trade_frame(value, symbol_cache, tx).await?;
                 } else if ty == "ping" {
@@ -199,6 +204,9 @@ pub async fn run_ws_ingestion(
                     debug!("unhandled ws frame type {ty:?}: {text}");
                 }
             }
+            _ = snapshot_timer.tick() => {
+                write_periodic_snapshots(&markets, symbol_cache, tx).await?;
+            }
             _ = keepalive.tick() => {
                 write.send(Message::Ping(Vec::new())).await.wrap_err("sending keepalive ping")?;
             }
@@ -206,10 +214,54 @@ pub async fn run_ws_ingestion(
     }
 }
 
+/// The book and nonce of one market in the current connection.
+pub struct MarketBook {
+    pub nonce: i64,
+    pub book: Book,
+}
+
+/// Writes one `snapshot` row for each market with a book, from the book
+/// after the last applied delta. Its `time` is the write time; readers
+/// must order rows of one connection by `sequence`.
+async fn write_periodic_snapshots(
+    markets: &HashMap<i32, MarketBook>,
+    symbol_cache: &HashMap<i32, i32>,
+    tx: &mpsc::Sender<WriteMsg>,
+) -> Result<()> {
+    let now = Utc::now();
+    for (market_id, market) in markets {
+        let symbol = *symbol_cache
+            .get(market_id)
+            .ok_or_else(|| eyre!("book for unknown market_id {market_id}"))?;
+        let row = book_snapshot_row(symbol, now, market)?;
+        tx.send(WriteMsg::Orderbook(row))
+            .await
+            .map_err(|_| eyre!("writer_task channel closed"))?;
+    }
+    debug!("wrote periodic snapshots for {} markets", markets.len());
+    Ok(())
+}
+
+pub fn book_snapshot_row(
+    symbol: i32,
+    time: DateTime<Utc>,
+    market: &MarketBook,
+) -> Result<OrderbookMessageRow> {
+    Ok(OrderbookMessageRow {
+        time,
+        symbol,
+        message_type: "snapshot".to_string(),
+        sequence: Some(market.nonce),
+        bids: serde_json::to_value(market.book.bids()).wrap_err("serializing bids")?,
+        asks: serde_json::to_value(market.book.asks()).wrap_err("serializing asks")?,
+        begin_nonce: None,
+    })
+}
+
 async fn handle_orderbook_frame(
     value: serde_json::Value,
     symbol_cache: &HashMap<i32, i32>,
-    last_nonce: &mut HashMap<i32, i64>,
+    markets: &mut HashMap<i32, MarketBook>,
     tx: &mpsc::Sender<WriteMsg>,
 ) -> Result<()> {
     let parsed: OrderBookWsMessage =
@@ -222,45 +274,69 @@ async fn handle_orderbook_frame(
         return Ok(());
     };
 
-    let row = match parsed {
+    let row = apply_orderbook_message(symbol, market_id, parsed, markets)?;
+    tx.send(WriteMsg::Orderbook(row))
+        .await
+        .map_err(|_| eyre!("writer_task channel closed"))
+}
+
+/// Applies one order_book message to the market's book and returns the row
+/// to store. A snapshot replaces the book. A delta must continue the nonce
+/// chain, or the call fails.
+pub fn apply_orderbook_message(
+    symbol: i32,
+    market_id: i32,
+    message: OrderBookWsMessage,
+    markets: &mut HashMap<i32, MarketBook>,
+) -> Result<OrderbookMessageRow> {
+    match message {
         OrderBookWsMessage::Subscribed {
             last_updated_at,
             order_book,
             ..
         } => {
-            last_nonce.insert(market_id, order_book.nonce);
-            orderbook_row(symbol, "snapshot", None, last_updated_at, &order_book)?
+            let book = Book::from_snapshot(&order_book.bids, &order_book.asks)
+                .wrap_err_with(|| format!("building book for market_id {market_id}"))?;
+            markets.insert(
+                market_id,
+                MarketBook {
+                    nonce: order_book.nonce,
+                    book,
+                },
+            );
+            orderbook_row(symbol, "snapshot", None, last_updated_at, &order_book)
         }
         OrderBookWsMessage::Update {
             last_updated_at,
             order_book,
             ..
         } => {
-            let Some(&prev_nonce) = last_nonce.get(&market_id) else {
+            let Some(market) = markets.get_mut(&market_id) else {
                 return Err(eyre!(
                     "order_book delta arrived before snapshot for market_id {market_id}"
                 ));
             };
-            if order_book.begin_nonce != prev_nonce {
+            if order_book.begin_nonce != market.nonce {
                 return Err(eyre!(
-                    "order_book gap for market_id {market_id}: begin_nonce {} != last nonce {prev_nonce}",
-                    order_book.begin_nonce
+                    "order_book gap for market_id {market_id}: begin_nonce {} != last nonce {}",
+                    order_book.begin_nonce,
+                    market.nonce
                 ));
             }
-            last_nonce.insert(market_id, order_book.nonce);
+            market
+                .book
+                .apply_delta(&order_book.bids, &order_book.asks)
+                .wrap_err_with(|| format!("applying delta for market_id {market_id}"))?;
+            market.nonce = order_book.nonce;
             orderbook_row(
                 symbol,
                 "delta",
                 Some(order_book.begin_nonce),
                 last_updated_at,
                 &order_book,
-            )?
+            )
         }
-    };
-
-    tx.send(WriteMsg::Orderbook(row))
-        .await
-        .map_err(|_| eyre!("writer_task channel closed"))
+    }
 }
 
 fn orderbook_row(
@@ -268,7 +344,7 @@ fn orderbook_row(
     message_type: &str,
     begin_nonce: Option<i64>,
     last_updated_at: i64,
-    order_book: &lighter_rs_types::orderbook::OrderBookSideLevels,
+    order_book: &OrderBookSideLevels,
 ) -> Result<OrderbookMessageRow> {
     Ok(OrderbookMessageRow {
         time: micros_to_datetime(last_updated_at)?,
@@ -344,4 +420,99 @@ fn micros_to_datetime(micros: i64) -> Result<DateTime<Utc>> {
 fn millis_to_datetime(millis: i64) -> Result<DateTime<Utc>> {
     DateTime::from_timestamp_millis(millis)
         .ok_or_else(|| eyre!("invalid timestamp (unix millis): {millis}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(json: &str) -> OrderBookWsMessage {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn snapshot(nonce: i64, bids: &str, asks: &str) -> OrderBookWsMessage {
+        msg(&format!(
+            r#"{{"type":"subscribed/order_book","channel":"order_book:7","offset":1,"last_updated_at":1790015233367788,"order_book":{{"code":0,"offset":1,"nonce":{nonce},"begin_nonce":0,"asks":{asks},"bids":{bids}}}}}"#
+        ))
+    }
+
+    fn delta(begin: i64, nonce: i64, bids: &str, asks: &str) -> OrderBookWsMessage {
+        msg(&format!(
+            r#"{{"type":"update/order_book","channel":"order_book:7","offset":2,"last_updated_at":1790015233367999,"order_book":{{"code":0,"offset":2,"nonce":{nonce},"begin_nonce":{begin},"asks":{asks},"bids":{bids}}}}}"#
+        ))
+    }
+
+    #[test]
+    fn rows_store_begin_nonce_and_snapshot_equals_book_after_last_delta() {
+        let mut markets = HashMap::new();
+        let snap = apply_orderbook_message(
+            3,
+            7,
+            snapshot(
+                10,
+                r#"[{"price":"217.71","size":"1.0000"},{"price":"217.69","size":"1"}]"#,
+                r#"[{"price":"217.80","size":"2"}]"#,
+            ),
+            &mut markets,
+        )
+        .unwrap();
+        assert_eq!(snap.begin_nonce, None);
+        assert_eq!(snap.sequence, Some(10));
+
+        let d = apply_orderbook_message(
+            3,
+            7,
+            delta(
+                10,
+                15,
+                r#"[{"price":"217.71","size":"0.0000"},{"price":"217.70","size":"0.0460"}]"#,
+                r#"[{"price":"217.80","size":"0"},{"price":"217.85","size":"4"}]"#,
+            ),
+            &mut markets,
+        )
+        .unwrap();
+        assert_eq!(d.message_type, "delta");
+        assert_eq!(d.begin_nonce, Some(10));
+        assert_eq!(d.sequence, Some(15));
+
+        let periodic = book_snapshot_row(3, Utc::now(), &markets[&7]).unwrap();
+        assert_eq!(periodic.message_type, "snapshot");
+        assert_eq!(periodic.sequence, Some(15));
+        assert_eq!(periodic.begin_nonce, None);
+        assert_eq!(
+            periodic.bids,
+            serde_json::json!([{"price":"217.70","size":"0.0460"},{"price":"217.69","size":"1"}])
+        );
+        assert_eq!(
+            periodic.asks,
+            serde_json::json!([{"price":"217.85","size":"4"}])
+        );
+    }
+
+    #[test]
+    fn gap_fails_and_leaves_the_book_unchanged() {
+        let mut markets = HashMap::new();
+        apply_orderbook_message(
+            3,
+            7,
+            snapshot(10, r#"[{"price":"1","size":"1"}]"#, "[]"),
+            &mut markets,
+        )
+        .unwrap();
+        let err = apply_orderbook_message(
+            3,
+            7,
+            delta(11, 12, r#"[{"price":"1","size":"0"}]"#, "[]"),
+            &mut markets,
+        );
+        assert!(err.is_err());
+        assert_eq!(markets[&7].nonce, 10);
+        assert_eq!(markets[&7].book.bids().len(), 1);
+    }
+
+    #[test]
+    fn delta_before_snapshot_fails() {
+        let mut markets = HashMap::new();
+        assert!(apply_orderbook_message(3, 7, delta(0, 1, "[]", "[]"), &mut markets).is_err());
+    }
 }
