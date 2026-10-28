@@ -3,8 +3,8 @@
 //! The endpoint returns settled fundings only. Predicted rates from the
 //! `market_stats` WebSocket channel never reach this module. Each request
 //! names one market, the `1h` resolution, and a start instant. The API
-//! excludes the start instant: a live probe returned no row at
-//! `start_timestamp` itself. Each page holds at most 750 rows, so a full
+//! includes the start instant: `start_timestamp=T` returns the row at `T`
+//! (live probe, 2026-10-28). Each page holds at most 750 rows, so a full
 //! page means more rows may follow.
 use crate::models::FundingRateRow;
 use crate::{insert_funding_rates, newest_funding_time};
@@ -77,17 +77,23 @@ pub fn parse_fundings_response(body: &str) -> Result<Vec<SettledFunding>> {
         .collect()
 }
 
-/// Checks that a page holds rows in strictly increasing time order, all after
-/// `start` and none after `now`. A settlement cannot lie in the future, so a
+/// Checks that a page holds rows in strictly increasing time order, none
+/// before the inclusive `start` and none after `now`. A settlement cannot lie in the future, so a
 /// future time signals a wrong unit, for example milliseconds read as seconds.
 pub fn validate_page(
     start: DateTime<Utc>,
     now: DateTime<Utc>,
     rows: &[SettledFunding],
 ) -> Result<()> {
-    let mut previous = start;
+    let mut previous: Option<DateTime<Utc>> = None;
     for row in rows {
-        if row.time <= previous {
+        if row.time < start {
+            bail!(
+                "funding at {} is before the requested start {start}",
+                row.time
+            );
+        }
+        if let Some(previous) = previous.filter(|previous| row.time <= *previous) {
             bail!(
                 "funding at {} does not follow {previous}; the page is not strictly increasing",
                 row.time
@@ -96,22 +102,28 @@ pub fn validate_page(
         if row.time > now {
             bail!("funding at {} is after the current time {now}", row.time);
         }
-        previous = row.time;
+        previous = Some(row.time);
     }
     Ok(())
 }
 
-/// Returns the exclusive lower bound for the next request. Starts after the
-/// newest stored settlement. With no stored settlement, starts at the
-/// configured backfill instant, one second earlier, so that instant is included.
+/// Returns the inclusive start of the next request: one second after the
+/// newest stored settlement, or the configured backfill instant when the
+/// market has no stored settlement.
 pub fn next_request_start(
     newest_stored: Option<DateTime<Utc>>,
     backfill_start: DateTime<Utc>,
 ) -> DateTime<Utc> {
     match newest_stored {
-        Some(time) => time,
-        None => backfill_start - ChronoDuration::seconds(1),
+        Some(time) => after(time),
+        None => backfill_start,
     }
+}
+
+/// The API start is inclusive, so a request that must skip `time` starts one
+/// second later. Settlements are whole hours, so no settlement is skipped.
+fn after(time: DateTime<Utc>) -> DateTime<Utc> {
+    time + ChronoDuration::seconds(1)
 }
 
 /// Polls settled funding for every perp market, forever.
@@ -176,11 +188,11 @@ async fn poll_market(
         if fetched < MAX_FUNDINGS_PER_CALL {
             return Ok(());
         }
-        start = last_time;
+        start = after(last_time);
     }
 }
 
-/// Requests one page of settled fundings that start after `start`, up to now.
+/// Requests one page of settled fundings from `start` (inclusive) up to now.
 /// Waits `REQUEST_SPACING` after every request, to respect the rate limit.
 async fn fetch_page(
     http: &reqwest::Client,
@@ -318,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn page_must_be_strictly_increasing_after_start() {
+    fn page_must_be_strictly_increasing_from_start() {
         let row = |secs: i64| SettledFunding {
             time: at(secs),
             rate: BigDecimal::from_str("0.0004").unwrap(),
@@ -328,8 +340,9 @@ mod tests {
         let now = at(2000);
         assert!(validate_page(start, now, &[row(1001), row(1002)]).is_ok());
         assert!(validate_page(start, now, &[]).is_ok());
-        // The start instant itself is excluded.
-        assert!(validate_page(start, now, &[row(1000)]).is_err());
+        // The API includes the start instant.
+        assert!(validate_page(start, now, &[row(1000), row(1001)]).is_ok());
+        assert!(validate_page(start, now, &[row(999)]).is_err());
         assert!(validate_page(start, now, &[row(1002), row(1001)]).is_err());
         assert!(validate_page(start, now, &[row(1001), row(1001)]).is_err());
         // A row after now is rejected.
@@ -337,18 +350,18 @@ mod tests {
     }
 
     #[test]
-    fn starts_after_the_newest_stored_settlement() {
+    fn starts_one_second_after_the_newest_stored_settlement() {
         let newest = Utc.with_ymd_and_hms(2026, 10, 27, 12, 0, 0).unwrap();
         let configured = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        assert_eq!(next_request_start(Some(newest), configured), newest);
+        assert_eq!(
+            next_request_start(Some(newest), configured),
+            Utc.with_ymd_and_hms(2026, 10, 27, 12, 0, 1).unwrap()
+        );
     }
 
     #[test]
-    fn starts_one_second_before_the_backfill_start_when_nothing_is_stored() {
+    fn starts_at_the_backfill_start_when_nothing_is_stored() {
         let configured = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        assert_eq!(
-            next_request_start(None, configured),
-            Utc.with_ymd_and_hms(2025, 12, 31, 23, 59, 59).unwrap()
-        );
+        assert_eq!(next_request_start(None, configured), configured);
     }
 }
