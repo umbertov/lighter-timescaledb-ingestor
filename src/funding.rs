@@ -107,23 +107,42 @@ pub fn validate_page(
     Ok(())
 }
 
-/// Returns the inclusive start of the next request: one second after the
-/// newest stored settlement, or the configured backfill instant when the
-/// market has no stored settlement.
+/// Returns the inclusive start of the next request, on the hourly funding
+/// grid: the first whole hour after the newest stored settlement, or the
+/// first whole hour at or after the configured backfill instant.
+///
+/// The API rounds `start_timestamp` up and `end_timestamp` down to the
+/// resolution, and answers 400 when the rounded end is before the rounded
+/// start (live probe, 2026-10-28: start 08:00:01 with end 08:23 fails). An
+/// hour-aligned start keeps every request valid.
 pub fn next_request_start(
     newest_stored: Option<DateTime<Utc>>,
     backfill_start: DateTime<Utc>,
 ) -> DateTime<Utc> {
     match newest_stored {
-        Some(time) => after(time),
-        None => backfill_start,
+        Some(time) => ceil_hour(time + ChronoDuration::seconds(1)),
+        None => ceil_hour(backfill_start),
     }
 }
 
-/// The API start is inclusive, so a request that must skip `time` starts one
-/// second later. Settlements are whole hours, so no settlement is skipped.
-fn after(time: DateTime<Utc>) -> DateTime<Utc> {
-    time + ChronoDuration::seconds(1)
+/// True when the hour that starts at `start` closed at or before `now`, so a
+/// request can return a settlement. A request before then would be rejected.
+pub fn hour_closed(start: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    start <= floor_hour(now)
+}
+
+fn floor_hour(time: DateTime<Utc>) -> DateTime<Utc> {
+    let secs = time.timestamp();
+    DateTime::from_timestamp(secs - secs.rem_euclid(3600), 0).expect("an hour within range")
+}
+
+fn ceil_hour(time: DateTime<Utc>) -> DateTime<Utc> {
+    let floor = floor_hour(time);
+    if floor == time {
+        floor
+    } else {
+        floor + ChronoDuration::hours(1)
+    }
 }
 
 /// Polls settled funding for every perp market, forever.
@@ -162,6 +181,9 @@ async fn poll_market(
     let mut start = next_request_start(newest, backfill_start);
 
     loop {
+        if !hour_closed(start, Utc::now()) {
+            return Ok(());
+        }
         let rows = fetch_page(http, api_url, market.lighter_market_id, start).await?;
         validate_page(start, Utc::now(), &rows)?;
         let Some(last_time) = rows.last().map(|row| row.time) else {
@@ -188,7 +210,7 @@ async fn poll_market(
         if fetched < MAX_FUNDINGS_PER_CALL {
             return Ok(());
         }
-        start = after(last_time);
+        start = next_request_start(Some(last_time), backfill_start);
     }
 }
 
@@ -350,18 +372,38 @@ mod tests {
     }
 
     #[test]
-    fn starts_one_second_after_the_newest_stored_settlement() {
+    fn starts_at_the_next_hour_after_the_newest_stored_settlement() {
         let newest = Utc.with_ymd_and_hms(2026, 10, 27, 12, 0, 0).unwrap();
         let configured = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
         assert_eq!(
             next_request_start(Some(newest), configured),
-            Utc.with_ymd_and_hms(2026, 10, 27, 12, 0, 1).unwrap()
+            Utc.with_ymd_and_hms(2026, 10, 27, 13, 0, 0).unwrap()
         );
     }
 
     #[test]
-    fn starts_at_the_backfill_start_when_nothing_is_stored() {
-        let configured = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        assert_eq!(next_request_start(None, configured), configured);
+    fn starts_at_the_backfill_hour_when_nothing_is_stored() {
+        let aligned = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        assert_eq!(next_request_start(None, aligned), aligned);
+        let mid_hour = Utc.with_ymd_and_hms(2026, 1, 1, 0, 30, 0).unwrap();
+        assert_eq!(
+            next_request_start(None, mid_hour),
+            Utc.with_ymd_and_hms(2026, 1, 1, 1, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn requests_only_after_the_start_hour_closed() {
+        let start = Utc.with_ymd_and_hms(2026, 10, 28, 9, 0, 0).unwrap();
+        // The failing case from the live log: 08:23 is before the 09:00 hour.
+        assert!(!hour_closed(
+            start,
+            Utc.with_ymd_and_hms(2026, 10, 28, 8, 23, 0).unwrap()
+        ));
+        assert!(hour_closed(start, start));
+        assert!(hour_closed(
+            start,
+            Utc.with_ymd_and_hms(2026, 10, 28, 9, 0, 5).unwrap()
+        ));
     }
 }
