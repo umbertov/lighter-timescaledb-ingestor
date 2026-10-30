@@ -1,6 +1,6 @@
 use diesel::prelude::*;
 
-use crate::schema::{orderbook_messages, symbols, trades};
+use crate::schema::{funding_rates, orderbook_messages, symbols, trades};
 
 #[derive(Queryable, Selectable, QueryableByName, Debug)]
 #[diesel(table_name = symbols)]
@@ -34,6 +34,15 @@ pub struct TradeRow {
 }
 
 #[derive(Insertable, Debug)]
+#[diesel(table_name = funding_rates)]
+pub struct FundingRateRow {
+    pub time: chrono::DateTime<chrono::Utc>,
+    pub symbol: i32,
+    pub rate: bigdecimal::BigDecimal,
+    pub direction: String,
+}
+
+#[derive(Insertable, Debug)]
 #[diesel(table_name = orderbook_messages)]
 pub struct OrderbookMessageRow {
     pub time: chrono::DateTime<chrono::Utc>,
@@ -42,4 +51,6 @@ pub struct OrderbookMessageRow {
     pub sequence: Option<i64>,
     pub bids: serde_json::Value,
     pub asks: serde_json::Value,
+    /// The nonce that a delta continues from. `None` for a snapshot.
+    pub begin_nonce: Option<i64>,
 }

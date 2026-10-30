@@ -7,6 +7,8 @@ This Rust service stores Lighter market data in TimescaleDB. It syncs market sym
 The service supports perpetual and spot markets. It stores trade, liquidation, deleverage, and market-settlement events in `trades`, with a type for each row. It stores order-book updates as JSONB price levels. It detects order-book gaps with the nonce chain and reconnects when a gap occurs. It also reconnects after WebSocket read failures.
 Container uptime does not guarantee that the WebSocket stays connected. The service logs failures and reconnects.
 
+The service also collects settled funding for every perp market in `funding_rates`. It polls `/api/v1/fundings`, which returns settled funding only. Predicted rates from the `market_stats` WebSocket channel are not stored.
+
 Private account fills are out of scope until the trading client uses Lighter.
 
 ## Setup
@@ -25,11 +27,64 @@ nix run .#compose -- up -d db
 
 Apply each `migrations/*/up.sql` file in timestamp order or use Diesel CLI. The `DATABASE_URL` value in `.env` connects from the host.
 
+The ingestor requires three settings. It stops at startup when one is missing:
+
+- `LIGHTER_FUNDING_POLL_INTERVAL_SECS`: seconds between funding polls, a whole number of at least 1.
+- `LIGHTER_FUNDING_BACKFILL_START`: the first settlement to collect for a market with no stored funding, in RFC 3339 UTC, for example `2026-01-01T00:00:00Z`.
+- `LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS`: seconds between periodic order-book snapshot rows for each market, a whole number of at least 1. For example, `600` writes a snapshot every 10 minutes.
+
 Start the ingestor after you apply the migrations:
 
 ```sh
 nix run .#up
 ```
+
+## Funding rates
+
+The poller runs after the symbol sync. For each perp market, it requests `/api/v1/fundings` with `resolution=1h`. It starts after the newest stored settlement, or at the backfill start when the market has no stored funding. It stores each row with `ON CONFLICT (symbol, time) DO NOTHING`, so restarts do not duplicate rows.
+
+Each `funding_rates` row holds one settlement: `time` is the settlement time, `rate` is the exact decimal from Lighter, and `direction` is Lighter's direction string. The docs define neither field. A comparison with the funding payments of a real account (2026-10-27, 1463 hourly payments) shows:
+
+- `rate` is a non-negative percentage per hour. The fraction is `rate / 100`.
+- `direction` names the side that pays: `long` means longs pay shorts, `short` means shorts pay longs.
+- The API field `value` is mark price × `rate` / 100, the funding per one base unit. It is not stored, because it follows from `rate` and the mark.
+
+The poller waits 1.1 seconds after each request. This keeps a Standard account under its 60 requests per minute REST limit. The API returns at most 750 rows per call, and the poller pages through a full page.
+
+A failed request, a malformed response, or a database error stops the poller and exits the process. Docker Compose restarts the service because the `ingestor` service sets `restart: unless-stopped`.
+
+This fail-fast behavior is deliberate. The poller does not retry in the process. The exit also stops the WebSocket ingestion until the container restarts. After the restart, the poller continues after the newest stored settlement of each market, so the restart does not lose or duplicate rows. Check the container restart count to find repeated poller failures.
+
+Query the newest stored settlement for one market:
+
+```sql
+SELECT max(time) FROM funding_rates WHERE symbol = (SELECT id FROM symbols WHERE name = 'NVDA' AND market_type = 'perp');
+```
+
+## Order-book rows
+
+Each `orderbook_messages` row stores the nonce after the message in `sequence`. A `delta` row also stores `begin_nonce`, the nonce that the delta continues from. A `snapshot` row stores `NULL` in `begin_nonce`. Rows written before the `begin_nonce` migration also store `NULL`.
+
+In one connection, the `begin_nonce` of a delta equals the `sequence` of the previous row of the same symbol. Each connection starts with a `snapshot` row. If a delta row has a `begin_nonce` that differs from the previous `sequence`, a delta is missing.
+
+The ingestor keeps an in-memory book for each market. A connect snapshot sets the book. Each delta updates it after the nonce check: a level with size zero, in any form such as `0` or `0.0000`, removes the price level, and any other size replaces it. Prices and sizes stay exact decimal strings. A reconnect discards all books.
+
+Every `LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS` seconds, the ingestor writes a `snapshot` row for each market from that book. The row has the `sequence` of the last delta and `NULL` in `begin_nonce`. It equals the book after that delta. Bids are in descending price order, asks in ascending price order. The row `time` is the write time, not a Lighter time. To rebuild a book, start from the newest snapshot of a symbol, then apply the deltas with a larger `sequence` in `sequence` order.
+
+The Parquet export does not include `begin_nonce`.
+
+## Deploy
+
+1. Apply the new migrations in this order, before you start the new image:
+   1. `migrations/2026-10-27-000005_funding_rates`
+   2. `migrations/2026-10-27-000006_orderbook_begin_nonce`
+2. Set the new environment values for the `ingestor` service:
+   - `LIGHTER_FUNDING_POLL_INTERVAL_SECS`
+   - `LIGHTER_FUNDING_BACKFILL_START`
+   - `LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS`, for example `600`
+3. Start the new image.
+
+Choose `LIGHTER_FUNDING_BACKFILL_START` deliberately. The poller uses it only for a market with no stored funding. After the first run, a change to the value has no effect on markets that have rows. An early start makes more requests at the first start: one request for each 750 settlements of each perp market, with 1.1 seconds between requests.
 
 ## Export data
 

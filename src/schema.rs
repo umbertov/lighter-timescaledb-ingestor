@@ -1,6 +1,15 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    funding_rates (symbol, time) {
+        time -> Timestamptz,
+        symbol -> Int4,
+        rate -> Numeric,
+        direction -> Text,
+    }
+}
+
+diesel::table! {
     orderbook_messages (time, id) {
         id -> Int8,
         time -> Timestamptz,
@@ -9,6 +18,7 @@ diesel::table! {
         sequence -> Nullable<Int8>,
         bids -> Jsonb,
         asks -> Jsonb,
+        begin_nonce -> Nullable<Int8>,
     }
 }
 
@@ -35,7 +45,8 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(funding_rates -> symbols (symbol));
 diesel::joinable!(orderbook_messages -> symbols (symbol));
 diesel::joinable!(trades -> symbols (symbol));
 
-diesel::allow_tables_to_appear_in_same_query!(orderbook_messages, symbols, trades,);
+diesel::allow_tables_to_appear_in_same_query!(funding_rates, orderbook_messages, symbols, trades,);

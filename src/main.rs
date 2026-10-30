@@ -2,10 +2,12 @@
 //!
 //! Symbol sync (`/api/v1/orderBooks` -> `symbols` table) runs once at
 //! startup, then WebSocket ingestion runs for every perp and spot market.
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::{eyre, Result, WrapErr};
 use diesel::{Connection, PgConnection};
 use lighter_rs_types::OrderBooksResponse;
+use lighter_timescaledb_rs::funding;
 use lighter_timescaledb_rs::ws::{self, WriteMsg};
 use mimalloc::MiMalloc;
 use std::path::PathBuf;
@@ -39,6 +41,28 @@ struct IngestorConfig {
         default_value = "wss://api.rh.lighter.xyz/stream?readonly=true"
     )]
     ws_url: String,
+
+    /// Seconds between settled-funding polls. Required when no subcommand runs.
+    #[arg(
+        long,
+        env = "LIGHTER_FUNDING_POLL_INTERVAL_SECS",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    funding_poll_interval_secs: Option<u64>,
+
+    /// First settlement to collect for a market with no stored funding, in RFC 3339 (UTC).
+    /// Required when no subcommand runs.
+    #[arg(long, env = "LIGHTER_FUNDING_BACKFILL_START")]
+    funding_backfill_start: Option<DateTime<Utc>>,
+
+    /// Seconds between periodic order-book snapshot rows for each market.
+    /// Required when no subcommand runs.
+    #[arg(
+        long,
+        env = "LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    orderbook_snapshot_interval_secs: Option<u64>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -102,6 +126,17 @@ async fn main() -> Result<()> {
         .wrap_err("waiting for Parquet export")?;
     }
 
+    let (Some(poll_interval_secs), Some(backfill_start), Some(snapshot_interval_secs)) = (
+        args.funding_poll_interval_secs,
+        args.funding_backfill_start,
+        args.orderbook_snapshot_interval_secs,
+    ) else {
+        return Err(eyre!(
+            "LIGHTER_FUNDING_POLL_INTERVAL_SECS, LIGHTER_FUNDING_BACKFILL_START and LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS must be set"
+        ));
+    };
+    let snapshot_interval = Duration::from_secs(snapshot_interval_secs);
+
     let mut conn = lighter_timescaledb_rs::establish_postgres_connection(&database_url)
         .wrap_err("connecting to postgres")?;
 
@@ -112,13 +147,40 @@ async fn main() -> Result<()> {
     let market_ids: Vec<i32> = symbol_cache.keys().copied().collect();
     info!("loaded {} markets for WS ingestion", market_ids.len());
 
+    let perp_markets =
+        lighter_timescaledb_rs::load_perp_markets(&mut conn).wrap_err("loading perp markets")?;
+
     let pool = lighter_timescaledb_rs::establish_postgres_connection_pool(&database_url)
         .wrap_err("establishing connection pool")?;
     let (tx, rx) = mpsc::channel::<WriteMsg>(WRITE_CHANNEL_CAPACITY);
-    tokio::spawn(ws::writer_task(rx, pool));
+    tokio::spawn(ws::writer_task(rx, pool.clone()));
+
+    let funding_api_url = args.api_url.clone();
+    tokio::spawn(async move {
+        let result = funding::run_funding_poller(
+            funding_api_url,
+            perp_markets,
+            pool,
+            backfill_start,
+            Duration::from_secs(poll_interval_secs),
+        )
+        .await;
+        if let Err(e) = result {
+            error!(error = ?e, "funding poller failed; exiting");
+            std::process::exit(1);
+        }
+    });
 
     loop {
-        if let Err(e) = ws::run_ws_ingestion(&args.ws_url, &market_ids, &symbol_cache, &tx).await {
+        if let Err(e) = ws::run_ws_ingestion(
+            &args.ws_url,
+            &market_ids,
+            &symbol_cache,
+            snapshot_interval,
+            &tx,
+        )
+        .await
+        {
             error!(
                 error = ?e,
                 reconnect_delay_ms = RECONNECT_DELAY.as_millis(),
