@@ -39,6 +39,12 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// client-initiated WS ping frame well under that window keeps the
 /// proxy's read timer from firing.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+/// The server sends a complete book on each `order_book` subscription, but a
+/// subscription can stay silent without an error: on 2026-11-03 one market of
+/// 90 got no book for 68 minutes after a reconnect while its trades arrived.
+/// A reconnect does not always help (another market stayed silent across
+/// several), so each interval resubscribes only the markets without a book.
+const BOOK_RESUBSCRIBE_INTERVAL: Duration = Duration::from_secs(60);
 
 pub enum WriteMsg {
     Trade(TradeRow),
@@ -169,6 +175,9 @@ pub async fn run_ws_ingestion(
     let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
     keepalive.tick().await; // first tick fires immediately; discard it
 
+    let mut book_check = tokio::time::interval(BOOK_RESUBSCRIBE_INTERVAL);
+    book_check.tick().await; // first tick fires immediately; discard it
+
     loop {
         tokio::select! {
             frame = read.next() => {
@@ -186,7 +195,10 @@ pub async fn run_ws_ingestion(
                     .wrap_err_with(|| format!("parsing ws frame: {text}"))?;
                 let ty = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-                if ty.ends_with("order_book") {
+                // Errors need not carry a `type`; a failed subscription must be visible.
+                if value.get("error").is_some() {
+                    error!("ws error frame: {text}");
+                } else if ty.ends_with("order_book") {
                     handle_orderbook_frame(value, symbol_cache, &mut markets, tx).await?;
                 } else if ty.ends_with("trade") {
                     handle_trade_frame(value, symbol_cache, tx).await?;
@@ -210,8 +222,33 @@ pub async fn run_ws_ingestion(
             _ = keepalive.tick() => {
                 write.send(Message::Ping(Vec::new())).await.wrap_err("sending keepalive ping")?;
             }
+            _ = book_check.tick() => {
+                let missing = missing_books(market_ids, &markets);
+                if !missing.is_empty() {
+                    warn!("no order_book snapshot for market_ids {missing:?}; resubscribing");
+                    for market_id in missing {
+                        let channel = format!("order_book/{market_id}");
+                        for ty in ["unsubscribe", "subscribe"] {
+                            let sub = serde_json::json!({"type": ty, "channel": channel});
+                            write
+                                .send(Message::Text(sub.to_string()))
+                                .await
+                                .wrap_err_with(|| format!("sending {ty} for {channel}"))?;
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+/// Subscribed markets that have no book in this connection yet.
+pub fn missing_books(market_ids: &[i32], markets: &HashMap<i32, MarketBook>) -> Vec<i32> {
+    market_ids
+        .iter()
+        .copied()
+        .filter(|id| !markets.contains_key(id))
+        .collect()
 }
 
 /// The book, nonce and source timestamp of one market in the current connection.
@@ -514,6 +551,16 @@ mod tests {
             latest.bids,
             serde_json::json!([{"price":"217.69","size":"1"}])
         );
+    }
+
+    #[test]
+    fn missing_books_lists_subscribed_markets_without_a_snapshot() {
+        let mut markets = HashMap::new();
+        assert_eq!(missing_books(&[7, 15], &markets), vec![7, 15]);
+        apply_orderbook_message(3, 7, snapshot(10, "[]", "[]"), &mut markets).unwrap();
+        assert_eq!(missing_books(&[7, 15], &markets), vec![15]);
+        // A book of a market outside the subscription list is not a subscribed market.
+        assert_eq!(missing_books(&[15], &markets), vec![15]);
     }
 
     #[test]
