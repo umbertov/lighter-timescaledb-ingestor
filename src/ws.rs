@@ -214,26 +214,26 @@ pub async fn run_ws_ingestion(
     }
 }
 
-/// The book and nonce of one market in the current connection.
+/// The book, nonce and source timestamp of one market in the current connection.
 pub struct MarketBook {
     pub nonce: i64,
+    pub source_time: DateTime<Utc>,
     pub book: Book,
 }
 
 /// Writes one `snapshot` row for each market with a book, from the book
-/// after the last applied delta. Its `time` is the write time; readers
-/// must order rows of one connection by `sequence`.
+/// after the last applied message. Preserve that message's source time so a
+/// timer cannot refresh stale data or move a time cursor past a later delta.
 async fn write_periodic_snapshots(
     markets: &HashMap<i32, MarketBook>,
     symbol_cache: &HashMap<i32, i32>,
     tx: &mpsc::Sender<WriteMsg>,
 ) -> Result<()> {
-    let now = Utc::now();
     for (market_id, market) in markets {
         let symbol = *symbol_cache
             .get(market_id)
             .ok_or_else(|| eyre!("book for unknown market_id {market_id}"))?;
-        let row = book_snapshot_row(symbol, now, market)?;
+        let row = book_snapshot_row(symbol, market)?;
         tx.send(WriteMsg::Orderbook(row))
             .await
             .map_err(|_| eyre!("writer_task channel closed"))?;
@@ -242,13 +242,9 @@ async fn write_periodic_snapshots(
     Ok(())
 }
 
-pub fn book_snapshot_row(
-    symbol: i32,
-    time: DateTime<Utc>,
-    market: &MarketBook,
-) -> Result<OrderbookMessageRow> {
+pub fn book_snapshot_row(symbol: i32, market: &MarketBook) -> Result<OrderbookMessageRow> {
     Ok(OrderbookMessageRow {
-        time,
+        time: market.source_time,
         symbol,
         message_type: "snapshot".to_string(),
         sequence: Some(market.nonce),
@@ -295,12 +291,14 @@ pub fn apply_orderbook_message(
             order_book,
             ..
         } => {
+            let source_time = micros_to_datetime(last_updated_at)?;
             let book = Book::from_snapshot(&order_book.bids, &order_book.asks)
                 .wrap_err_with(|| format!("building book for market_id {market_id}"))?;
             markets.insert(
                 market_id,
                 MarketBook {
                     nonce: order_book.nonce,
+                    source_time,
                     book,
                 },
             );
@@ -323,11 +321,18 @@ pub fn apply_orderbook_message(
                     market.nonce
                 ));
             }
+            let source_time = micros_to_datetime(last_updated_at)?;
+            if source_time < market.source_time {
+                return Err(eyre!(
+                    "order_book source time moved backwards for market_id {market_id}"
+                ));
+            }
             market
                 .book
                 .apply_delta(&order_book.bids, &order_book.asks)
                 .wrap_err_with(|| format!("applying delta for market_id {market_id}"))?;
             market.nonce = order_book.nonce;
+            market.source_time = source_time;
             orderbook_row(
                 symbol,
                 "delta",
@@ -458,6 +463,7 @@ mod tests {
         .unwrap();
         assert_eq!(snap.begin_nonce, None);
         assert_eq!(snap.sequence, Some(10));
+        assert_eq!(book_snapshot_row(3, &markets[&7]).unwrap().time, snap.time);
 
         let d = apply_orderbook_message(
             3,
@@ -475,7 +481,9 @@ mod tests {
         assert_eq!(d.begin_nonce, Some(10));
         assert_eq!(d.sequence, Some(15));
 
-        let periodic = book_snapshot_row(3, Utc::now(), &markets[&7]).unwrap();
+        let periodic = book_snapshot_row(3, &markets[&7]).unwrap();
+        assert_eq!(periodic.time, d.time);
+        assert_eq!(book_snapshot_row(3, &markets[&7]).unwrap().time, d.time);
         assert_eq!(periodic.message_type, "snapshot");
         assert_eq!(periodic.sequence, Some(15));
         assert_eq!(periodic.begin_nonce, None);
@@ -486,6 +494,25 @@ mod tests {
         assert_eq!(
             periodic.asks,
             serde_json::json!([{"price":"217.85","size":"4"}])
+        );
+
+        // A later nonce may have the same source timestamp. A periodic row
+        // must not advance a reader beyond that update or refresh its age.
+        let next = apply_orderbook_message(
+            3,
+            7,
+            delta(15, 16, r#"[{"price":"217.70","size":"0"}]"#, "[]"),
+            &mut markets,
+        )
+        .unwrap();
+        assert_eq!(next.time, periodic.time);
+        assert_eq!(next.begin_nonce, periodic.sequence);
+        let latest = book_snapshot_row(3, &markets[&7]).unwrap();
+        assert_eq!(latest.time, next.time);
+        assert_eq!(latest.sequence, Some(16));
+        assert_eq!(
+            latest.bids,
+            serde_json::json!([{"price":"217.69","size":"1"}])
         );
     }
 
@@ -508,6 +535,22 @@ mod tests {
         assert!(err.is_err());
         assert_eq!(markets[&7].nonce, 10);
         assert_eq!(markets[&7].book.bids().len(), 1);
+
+        let before = book_snapshot_row(3, &markets[&7]).unwrap();
+        let mut regressing = delta(10, 11, r#"[{"price":"1","size":"0"}]"#, "[]");
+        if let OrderBookWsMessage::Update {
+            last_updated_at, ..
+        } = &mut regressing
+        {
+            *last_updated_at = before.time.timestamp_micros() - 1;
+        }
+        let err = apply_orderbook_message(3, 7, regressing, &mut markets).unwrap_err();
+        assert!(err.to_string().contains("source time moved backwards"));
+        let after = book_snapshot_row(3, &markets[&7]).unwrap();
+        assert_eq!(after.time, before.time);
+        assert_eq!(after.sequence, before.sequence);
+        assert_eq!(after.bids, before.bids);
+        assert_eq!(after.asks, before.asks);
     }
 
     #[test]

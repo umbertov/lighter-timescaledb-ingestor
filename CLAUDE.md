@@ -8,6 +8,7 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 - Trades and order-book messages use TimescaleDB hypertables.
 - Accept the documented trade types: `trade`, `liquidation`, `deleverage`, and `market-settlement`.
 - Store order-book bids and asks as JSONB price-level arrays.
+- Periodic snapshots retain the last applied message's source time and nonce. Never refresh source age with local write time. Reject regressing delta timestamps before mutating the book.
 - Store settled funding in `funding_rates`, one row per perp market and settlement time. Never store predicted rates there.
 - Store funding rates as `NUMERIC` and parse them as exact decimals. Do not use floats for rates.
 - Use `lighter_market_id` as the symbol upsert conflict key.
