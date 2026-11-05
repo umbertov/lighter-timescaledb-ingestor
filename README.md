@@ -87,7 +87,7 @@ The Parquet export does not include `begin_nonce`.
    - `LIGHTER_ORDERBOOK_SNAPSHOT_INTERVAL_SECS`, for example `600`
 3. Start the new image.
 
-The order-book index migration adds a `(symbol, id)` B-tree for ingestion-ID replay and a partial `(symbol, id DESC, time)` B-tree for historical snapshot anchors. It accepts valid equivalent indexes, including completed TimescaleDB per-chunk builds. Stop ingestion before applying it to a populated database because transactional index creation can block writes. A conflicting canonical name fails the migration. Reverting drops both canonical indexes, including any previously created under those names.
+The order-book index migration adds a `(symbol, id)` B-tree for ingestion-ID replay and a partial `(symbol, id DESC, time)` B-tree for historical snapshot anchors. It reuses valid matching indexes under the canonical names, including completed TimescaleDB per-chunk builds. Stop ingestion before applying it to a populated database because transactional index creation can block writes. A conflicting canonical name fails the migration. Reverting drops both canonical indexes, including any previously created under those names.
 
 Choose `LIGHTER_FUNDING_BACKFILL_START` deliberately. The poller uses it only for a market with no stored funding. After the first run, a change to the value has no effect on markets that have rows. An early start makes more requests at the first start: one request for each 750 settlements of each perp market, with 1.1 seconds between requests.
 
