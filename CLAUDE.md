@@ -23,6 +23,7 @@ Read `README.md` before you change the project. Maintain `README.md` and `CLAUDE
 - Test migrations against a disposable database before you use production data.
 - Do not revert a migration when Diesel bookkeeping differs from the schema.
 - Inspect the schema first, then repair migration bookkeeping if needed.
+- Preserve the order-book replay and snapshot indexes. Accept valid equivalent indexes and fail on incompatible canonical names.
 
 ## Development
 
